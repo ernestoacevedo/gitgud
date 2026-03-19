@@ -46,6 +46,11 @@ struct CommitSummary {
     short_sha: String,
     summary: String,
     author_name: String,
+    authored_at: i64,
+    lane: usize,
+    parent_lanes: Vec<usize>,
+    visible_lane_count: usize,
+    is_head: bool,
 }
 
 fn short_head_sha(repository: &Repository) -> Option<String> {
@@ -196,20 +201,76 @@ fn recent_commits(repository: &Repository) -> Result<Vec<CommitSummary>, String>
         ));
     }
 
-    let mut commits = Vec::new();
+    revwalk
+        .set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)
+        .map_err(|error| format!("No fue posible ordenar el historial del repositorio: {error}"))?;
 
-    for oid in revwalk.take(8) {
+    let head_oid = repository.head().ok().and_then(|head| head.target());
+    let mut commits = Vec::new();
+    let mut active_lanes = Vec::new();
+
+    for oid in revwalk.take(20) {
         let oid =
             oid.map_err(|error| format!("No fue posible recorrer el historial del repositorio: {error}"))?;
         let commit = repository
             .find_commit(oid)
             .map_err(|error| format!("No fue posible cargar un commit del historial: {error}"))?;
+        let lane = active_lanes
+            .iter()
+            .position(|active_oid| *active_oid == oid)
+            .unwrap_or_else(|| {
+                active_lanes.push(oid);
+                active_lanes.len() - 1
+            });
+        let parent_ids = commit.parent_ids().collect::<Vec<_>>();
+        let active_lane_count = active_lanes.len();
+        let mut next_active_lanes = active_lanes.clone();
+
+        if parent_ids.is_empty() {
+            next_active_lanes.remove(lane);
+        } else {
+            next_active_lanes[lane] = parent_ids[0];
+
+            for (offset, parent_id) in parent_ids.iter().skip(1).enumerate() {
+                if let Some(existing_index) = next_active_lanes.iter().position(|active_oid| active_oid == parent_id)
+                {
+                    if existing_index != lane {
+                        next_active_lanes.remove(existing_index);
+                    }
+                }
+
+                next_active_lanes.insert(lane + offset + 1, *parent_id);
+            }
+        }
+
+        let mut deduped_lanes = Vec::with_capacity(next_active_lanes.len());
+        for active_oid in next_active_lanes {
+            if !deduped_lanes.contains(&active_oid) {
+                deduped_lanes.push(active_oid);
+            }
+        }
+
+        let parent_lanes = parent_ids
+            .iter()
+            .filter_map(|parent_id| deduped_lanes.iter().position(|active_oid| active_oid == parent_id))
+            .collect::<Vec<_>>();
+        let visible_lane_count = active_lane_count
+            .max(deduped_lanes.len())
+            .max(parent_lanes.iter().copied().max().map_or(0, |max_lane| max_lane + 1))
+            .max(lane + 1);
 
         commits.push(CommitSummary {
             short_sha: short_oid(commit.id()),
             summary: display_commit_summary(&commit),
             author_name: display_author_name(&commit),
+            authored_at: commit.time().seconds(),
+            lane,
+            parent_lanes,
+            visible_lane_count,
+            is_head: head_oid == Some(commit.id()),
         });
+
+        active_lanes = deduped_lanes;
     }
 
     Ok(commits)
@@ -326,32 +387,37 @@ mod tests {
     use std::path::Path;
     use tempfile::tempdir;
 
-    #[test]
-    fn loads_repository_state_for_valid_repo() {
-        let directory = tempdir().expect("tempdir");
-        let repository = Repository::init(directory.path()).expect("repo init");
-
-        fs::write(directory.path().join("README.md"), "# GitGud\n").expect("write readme");
-
+    fn commit_all(repository: &Repository, signature: &Signature<'_>, message: &str) -> git2::Oid {
         let mut index = repository.index().expect("index");
         index
-            .add_path(std::path::Path::new("README.md"))
-            .expect("add path");
+            .add_all(["*"], IndexAddOption::DEFAULT, None)
+            .expect("add all");
         index.write().expect("write index");
         let tree_id = index.write_tree().expect("write tree");
         let tree = repository.find_tree(tree_id).expect("find tree");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let parent_commit = repository.head().ok().and_then(|head| head.peel_to_commit().ok());
+        let parent_refs = parent_commit.iter().collect::<Vec<_>>();
 
         repository
             .commit(
                 Some("HEAD"),
-                &signature,
-                &signature,
-                "Initial commit",
+                signature,
+                signature,
+                message,
                 &tree,
-                &[],
+                &parent_refs,
             )
-            .expect("commit");
+            .expect("commit")
+    }
+
+    #[test]
+    fn loads_repository_state_for_valid_repo() {
+        let directory = tempdir().expect("tempdir");
+        let repository = Repository::init(directory.path()).expect("repo init");
+        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+
+        fs::write(directory.path().join("README.md"), "# GitGud\n").expect("write readme");
+        commit_all(&repository, &signature, "Initial commit");
         repository.index().expect("index").write().expect("write index");
 
         let state = repository_state_from_path(directory.path()).expect("state");
@@ -397,19 +463,10 @@ mod tests {
     fn resolves_branch_names_through_local_branch_lookup() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
+        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("tracked.txt"), "content").expect("write file");
-        let mut index = repository.index().expect("index");
-        index
-            .add_path(std::path::Path::new("tracked.txt"))
-            .expect("add path");
-        index.write().expect("write index");
-        let tree_id = index.write_tree().expect("write tree");
-        let tree = repository.find_tree(tree_id).expect("find tree");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
-        let commit_id = repository
-            .commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
-            .expect("commit");
+        let commit_id = commit_all(&repository, &signature, "init");
         let commit = repository.find_commit(commit_id).expect("find commit");
 
         repository
@@ -438,16 +495,7 @@ mod tests {
         let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
-        let mut index = repository.index().expect("index");
-        index
-            .add_all(["*"], IndexAddOption::DEFAULT, None)
-            .expect("add all");
-        index.write().expect("write index");
-        let tree_id = index.write_tree().expect("write tree");
-        let tree = repository.find_tree(tree_id).expect("find tree");
-        repository
-            .commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
-            .expect("commit");
+        commit_all(&repository, &signature, "init");
         repository.index().expect("index").write().expect("write index");
 
         fs::write(directory.path().join("tracked.txt"), "base\nworktree\n").expect("modify tracked");
@@ -485,16 +533,7 @@ mod tests {
         fs::write(directory.path().join("rename-me.txt"), "rename\n").expect("write rename");
         fs::write(directory.path().join("delete-me.txt"), "delete\n").expect("write delete");
 
-        let mut index = repository.index().expect("index");
-        index
-            .add_all(["*"], IndexAddOption::DEFAULT, None)
-            .expect("add all");
-        index.write().expect("write index");
-        let tree_id = index.write_tree().expect("write tree");
-        let tree = repository.find_tree(tree_id).expect("find tree");
-        repository
-            .commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
-            .expect("commit");
+        commit_all(&repository, &signature, "init");
         repository.index().expect("index").write().expect("write index");
 
         fs::rename(
@@ -540,16 +579,7 @@ mod tests {
         let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
-        let mut index = repository.index().expect("index");
-        index
-            .add_all(["*"], IndexAddOption::DEFAULT, None)
-            .expect("add all");
-        index.write().expect("write index");
-        let tree_id = index.write_tree().expect("write tree");
-        let tree = repository.find_tree(tree_id).expect("find tree");
-        repository
-            .commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
-            .expect("commit");
+        commit_all(&repository, &signature, "init");
 
         repository
             .config()
@@ -577,6 +607,79 @@ mod tests {
         assert!(state.recent_commits.len() >= 2);
         assert_eq!(state.recent_commits[0].summary, "Save staged work");
         assert_eq!(state.head_short_sha.as_deref(), Some(state.recent_commits[0].short_sha.as_str()));
+        assert!(state.recent_commits[0].is_head);
+    }
+
+    #[test]
+    fn includes_graph_metadata_for_merge_commits() {
+        let directory = tempdir().expect("tempdir");
+        let repository = Repository::init(directory.path()).expect("repo init");
+        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+
+        fs::write(directory.path().join("shared.txt"), "base\n").expect("write base");
+        let base_commit_id = commit_all(&repository, &signature, "base");
+        let base_commit = repository.find_commit(base_commit_id).expect("base commit");
+
+        repository
+            .branch("feature/graph", &base_commit, false)
+            .expect("branch");
+
+        fs::write(directory.path().join("main.txt"), "main\n").expect("write main");
+        let main_commit_id = commit_all(&repository, &signature, "main change");
+        let main_commit = repository.find_commit(main_commit_id).expect("main commit");
+
+        repository
+            .set_head("refs/heads/feature/graph")
+            .expect("set feature head");
+        repository
+            .checkout_head(None)
+            .expect("checkout feature head");
+        fs::write(directory.path().join("feature.txt"), "feature\n").expect("write feature");
+        let feature_commit_id = commit_all(&repository, &signature, "feature change");
+        let feature_commit = repository
+            .find_commit(feature_commit_id)
+            .expect("feature commit");
+
+        repository
+            .set_head("refs/heads/master")
+            .expect("set master head");
+        repository
+            .checkout_head(None)
+            .expect("checkout master head");
+
+        let mut index = repository.index().expect("index");
+        index
+            .add_all(["*"], IndexAddOption::DEFAULT, None)
+            .expect("add all");
+        index.write().expect("write index");
+        let tree_id = index.write_tree().expect("write tree");
+        let tree = repository.find_tree(tree_id).expect("tree");
+
+        repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "merge feature",
+                &tree,
+                &[&main_commit, &feature_commit],
+            )
+            .expect("merge commit");
+
+        let state = repository_state_from_path(directory.path()).expect("state");
+        let merge_commit = &state.recent_commits[0];
+
+        assert_eq!(merge_commit.summary, "merge feature");
+        assert!(merge_commit.is_head);
+        assert_eq!(merge_commit.parent_lanes.len(), 2);
+        assert!(merge_commit.visible_lane_count >= 2);
+        assert!(
+            state
+                .recent_commits
+                .iter()
+                .skip(1)
+                .any(|commit| commit.short_sha == short_sha(feature_commit_id))
+        );
     }
 
     #[test]
@@ -598,5 +701,9 @@ mod tests {
         let error = create_commit_for_repository(&repository, "Empty commit").expect_err("expected error");
 
         assert!(error.contains("No hay cambios staged"));
+    }
+
+    fn short_sha(oid: git2::Oid) -> String {
+        oid.to_string().chars().take(7).collect()
     }
 }

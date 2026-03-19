@@ -36,6 +36,11 @@ type CommitSummary = {
   shortSha: string;
   summary: string;
   authorName: string;
+  authoredAt: number;
+  lane: number;
+  parentLanes: number[];
+  visibleLaneCount: number;
+  isHead: boolean;
 };
 
 const CHANGE_LABELS: Record<ChangeKind, string> = {
@@ -354,13 +359,7 @@ function App() {
           ) : repository.recentCommits.length > 0 ? (
             <ul className="history-list">
               {repository.recentCommits.map((commit) => (
-                <li key={commit.shortSha} className="history-row">
-                  <div className="history-row__meta">
-                    <span className="commit-sha">{commit.shortSha}</span>
-                    <span className="history-author">{commit.authorName}</span>
-                  </div>
-                  <p className="history-summary">{commit.summary}</p>
-                </li>
+                <HistoryRow key={commit.shortSha} commit={commit} />
               ))}
             </ul>
           ) : (
@@ -412,6 +411,94 @@ function StatusColumn({
         <p className="placeholder-copy">{emptyMessage}</p>
       )}
     </section>
+  );
+}
+
+type HistoryRowProps = {
+  commit: CommitSummary;
+};
+
+function HistoryRow({ commit }: HistoryRowProps) {
+  const formattedDate = new Intl.DateTimeFormat("es-CL", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(commit.authoredAt * 1000));
+
+  return (
+    <li className={`history-row${commit.isHead ? " history-row--head" : ""}`}>
+      <CommitGraph commit={commit} />
+      <div className="history-row__content">
+        <div className="history-row__meta">
+          <span className="commit-sha">{commit.shortSha}</span>
+          {commit.isHead ? <span className="head-badge">HEAD</span> : null}
+          <span className="history-author">{commit.authorName}</span>
+          <span className="history-date">{formattedDate}</span>
+        </div>
+        <p className="history-summary">{commit.summary}</p>
+      </div>
+    </li>
+  );
+}
+
+type CommitGraphProps = {
+  commit: CommitSummary;
+};
+
+function CommitGraph({ commit }: CommitGraphProps) {
+  const laneWidth = 24;
+  const graphHeight = 72;
+  const topY = 10;
+  const nodeY = 24;
+  const bottomY = 62;
+  const width = Math.max(commit.visibleLaneCount, 1) * laneWidth;
+  const lanes = Array.from({ length: Math.max(commit.visibleLaneCount, 1) }, (_, lane) => lane);
+  const nodeX = commit.lane * laneWidth + laneWidth / 2;
+
+  return (
+    <div className="commit-graph" aria-hidden="true">
+      <svg width={width} height={graphHeight} viewBox={`0 0 ${width} ${graphHeight}`}>
+        {lanes.map((lane) => {
+          const x = lane * laneWidth + laneWidth / 2;
+
+          return (
+            <line
+              key={`lane-${commit.shortSha}-${lane}`}
+              x1={x}
+              y1={topY}
+              x2={x}
+              y2={bottomY}
+              className="commit-graph__lane"
+            />
+          );
+        })}
+
+        {commit.parentLanes.map((lane, index) => {
+          const parentX = lane * laneWidth + laneWidth / 2;
+          const path =
+            lane === commit.lane
+              ? `M ${nodeX} ${nodeY} L ${parentX} ${bottomY}`
+              : `M ${nodeX} ${nodeY} C ${nodeX} ${nodeY + 18}, ${parentX} ${bottomY - 18}, ${parentX} ${bottomY}`;
+
+          return (
+            <path
+              key={`edge-${commit.shortSha}-${lane}-${index}`}
+              d={path}
+              className="commit-graph__edge"
+            />
+          );
+        })}
+
+        {commit.isHead ? (
+          <circle
+            cx={nodeX}
+            cy={nodeY}
+            r={9}
+            className="commit-graph__head-halo"
+          />
+        ) : null}
+        <circle cx={nodeX} cy={nodeY} r={5.5} className="commit-graph__node" />
+      </svg>
+    </div>
   );
 }
 
