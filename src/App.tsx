@@ -542,7 +542,6 @@ function App() {
     <div className="bg-surface text-on-surface font-body overflow-hidden h-screen flex flex-col">
       <header className="bg-[#060e20] text-[#00D1FF] font-headline tracking-tight flex justify-between items-center px-4 h-12 shrink-0 z-50 border-b border-outline-variant/10">
         <div className="flex items-center gap-6 h-full">
-          <span className="text-xl font-bold text-[#00D1FF]">GitGud</span>
           <nav className="flex h-full items-end gap-1">
             {tabs.map((tab) => (
               <button
@@ -613,15 +612,7 @@ function App() {
              </>
           ) : null}
         </div>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 text-[10px] font-label text-on-surface-variant uppercase tracking-widest">
-            {repository ? (
-              <><span className="w-2 h-2 rounded-full bg-secondary"></span>Connected</>
-            ) : (
-              <><span className="w-2 h-2 rounded-full bg-outline-variant"></span>No Repo</>
-            )}
-          </div>
-        </div>
+        <div />
       </section>
 
       <div className="flex flex-1 overflow-hidden">
