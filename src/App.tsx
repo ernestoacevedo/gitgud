@@ -1,4 +1,4 @@
-import { memo, startTransition, useCallback, useEffect, useRef, useState } from "react";
+import { memo, startTransition, useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import "./App.css";
@@ -86,6 +86,7 @@ type FeedbackState = {
 type WorkspaceTab = {
   id: number;
   title: string;
+  isPinned: boolean;
   repository: RepositoryState | null;
   feedback: FeedbackState | null;
   selectedHistoryEntryId: string | null;
@@ -95,9 +96,20 @@ type WorkspaceTab = {
   commitDetailCache: Record<string, CommitDetail>;
 };
 
+type PersistedTab = {
+  repositoryPath: string | null;
+  isPinned: boolean;
+};
+
 type PersistedSession = {
-  repositories: string[];
-  activeRepositoryIndex: number;
+  tabs: PersistedTab[];
+  activeTabIndex: number;
+};
+
+type TabContextMenuState = {
+  tabId: number;
+  x: number;
+  y: number;
 };
 
 const WORKING_TREE_HISTORY_ENTRY_ID = "working-tree";
@@ -125,6 +137,7 @@ function createEmptyTab(id: number): WorkspaceTab {
   return {
     id,
     title: "Nuevo tab",
+    isPinned: false,
     repository: null,
     feedback: null,
     selectedHistoryEntryId: null,
@@ -142,22 +155,71 @@ function parsePersistedSession(rawValue: string | null): PersistedSession | null
 
   try {
     const parsedValue = JSON.parse(rawValue) as Partial<PersistedSession>;
-    const repositories = Array.isArray(parsedValue.repositories)
-      ? parsedValue.repositories.filter((value): value is string => typeof value === "string")
+    const tabs = Array.isArray(parsedValue.tabs)
+      ? parsedValue.tabs.flatMap((value) => {
+          if (!value || typeof value !== "object") {
+            return [];
+          }
+
+          const candidate = value as Partial<PersistedTab>;
+          const repositoryPath =
+            typeof candidate.repositoryPath === "string" ? candidate.repositoryPath : null;
+
+          return [
+            {
+              repositoryPath,
+              isPinned: candidate.isPinned === true,
+            },
+          ];
+        })
+      : Array.isArray((parsedValue as { repositories?: unknown }).repositories)
+        ? (parsedValue as { repositories: unknown[] }).repositories.flatMap((value) =>
+            typeof value === "string"
+              ? [{ repositoryPath: value, isPinned: false }]
+              : [],
+          )
       : [];
-    const activeRepositoryIndex =
-      typeof parsedValue.activeRepositoryIndex === "number" &&
-      Number.isInteger(parsedValue.activeRepositoryIndex)
-        ? parsedValue.activeRepositoryIndex
+    const activeTabIndex =
+      typeof parsedValue.activeTabIndex === "number" && Number.isInteger(parsedValue.activeTabIndex)
+        ? parsedValue.activeTabIndex
+        : typeof (parsedValue as { activeRepositoryIndex?: unknown }).activeRepositoryIndex ===
+              "number" &&
+            Number.isInteger((parsedValue as { activeRepositoryIndex: number }).activeRepositoryIndex)
+          ? (parsedValue as { activeRepositoryIndex: number }).activeRepositoryIndex
         : 0;
 
     return {
-      repositories,
-      activeRepositoryIndex,
+      tabs,
+      activeTabIndex,
     };
   } catch {
     return null;
   }
+}
+
+function sortTabsForDisplay<T extends { isPinned: boolean }>(tabs: T[]) {
+  const pinnedTabs = tabs.filter((tab) => tab.isPinned);
+  const unpinnedTabs = tabs.filter((tab) => !tab.isPinned);
+  return [...pinnedTabs, ...unpinnedTabs];
+}
+
+function reorderTabs(tabs: WorkspaceTab[], draggedTabId: number, targetTabId: number) {
+  if (draggedTabId === targetTabId) {
+    return tabs;
+  }
+
+  const draggedIndex = tabs.findIndex((tab) => tab.id === draggedTabId);
+  const targetIndex = tabs.findIndex((tab) => tab.id === targetTabId);
+
+  if (draggedIndex === -1 || targetIndex === -1) {
+    return tabs;
+  }
+
+  const nextTabs = [...tabs];
+  const [draggedTab] = nextTabs.splice(draggedIndex, 1);
+  nextTabs.splice(targetIndex, 0, draggedTab);
+
+  return sortTabsForDisplay(nextTabs);
 }
 
 const DATE_TIME_FORMATTER = new Intl.DateTimeFormat("es-CL", {
@@ -180,6 +242,8 @@ function App() {
   const [tabs, setTabs] = useState<WorkspaceTab[]>([createEmptyTab(1)]);
   const [activeTabId, setActiveTabId] = useState(1);
   const [nextTabId, setNextTabId] = useState(2);
+  const [draggedTabId, setDraggedTabId] = useState<number | null>(null);
+  const [tabContextMenu, setTabContextMenu] = useState<TabContextMenuState | null>(null);
   const [isOpening, setIsOpening] = useState(false);
   const [activeStatusAction, setActiveStatusAction] = useState<string | null>(null);
   const [isCommitting, setIsCommitting] = useState(false);
@@ -190,6 +254,7 @@ function App() {
   const latestCommitDetailRequestRef = useRef(0);
   const hasRestoredSessionRef = useRef(false);
   const refreshInFlightRef = useRef<Set<number>>(new Set());
+  const tabContextMenuRef = useRef<HTMLDivElement | null>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const repository = activeTab?.repository ?? null;
@@ -279,6 +344,69 @@ function App() {
     setTabs((currentTabs) => [...currentTabs, createEmptyTab(newId)]);
     setActiveTabId(newId);
     setNextTabId((value) => value + 1);
+  }
+
+  function handleTogglePinned(tabId: number) {
+    setTabs((currentTabs) => {
+      const nextTabs = currentTabs.map((tab) =>
+        tab.id === tabId ? { ...tab, isPinned: !tab.isPinned } : tab,
+      );
+      return sortTabsForDisplay(nextTabs);
+    });
+  }
+
+  function handleDragStart(tabId: number) {
+    setDraggedTabId(tabId);
+    setTabContextMenu(null);
+  }
+
+  function handleDragEnd() {
+    setDraggedTabId(null);
+  }
+
+  function handleDropOnTab(targetTabId: number) {
+    if (draggedTabId === null || draggedTabId === targetTabId) {
+      setDraggedTabId(null);
+      return;
+    }
+
+    setTabs((currentTabs) => reorderTabs(currentTabs, draggedTabId, targetTabId));
+    setDraggedTabId(null);
+  }
+
+  function handleCloseTab(tabId: number) {
+    setTabs((currentTabs) => {
+      const targetTab = currentTabs.find((tab) => tab.id === tabId);
+
+      if (!targetTab || targetTab.isPinned || currentTabs.length === 1) {
+        return currentTabs;
+      }
+
+      const nextTabs = currentTabs.filter((tab) => tab.id !== tabId);
+
+      if (activeTabId === tabId) {
+        const closedTabIndex = currentTabs.findIndex((tab) => tab.id === tabId);
+        const fallbackTab =
+          nextTabs[closedTabIndex] ?? nextTabs[Math.max(closedTabIndex - 1, 0)] ?? nextTabs[0];
+
+        if (fallbackTab) {
+          setActiveTabId(fallbackTab.id);
+        }
+      }
+
+      return nextTabs;
+    });
+    setTabContextMenu(null);
+  }
+
+  function handleTabContextMenu(event: MouseEvent<HTMLButtonElement>, tabId: number) {
+    event.preventDefault();
+    setActiveTabId(tabId);
+    setTabContextMenu({
+      tabId,
+      x: event.clientX,
+      y: event.clientY,
+    });
   }
 
   async function handleOpenRepository(tabId = activeTabId) {
@@ -525,13 +653,17 @@ function App() {
     async function restorePersistedRepositories() {
       const persistedSession = parsePersistedSession(localStorage.getItem(PERSISTED_SESSION_KEY));
 
-      if (!persistedSession || persistedSession.repositories.length === 0) {
+      if (!persistedSession || persistedSession.tabs.length === 0) {
         hasRestoredSessionRef.current = true;
         return;
       }
 
       const restoredRepositories = await Promise.allSettled(
-        persistedSession.repositories.map((path) => invoke<RepositoryState>("open_repository", { path })),
+        persistedSession.tabs.map((tab) =>
+          tab.repositoryPath
+            ? invoke<RepositoryState>("open_repository", { path: tab.repositoryPath })
+            : Promise.resolve(null),
+        ),
       );
 
       if (isCancelled) {
@@ -539,20 +671,32 @@ function App() {
       }
 
       const restoredTabs = restoredRepositories.flatMap((result, index) => {
-        if (result.status !== "fulfilled") {
+        const persistedTab = persistedSession.tabs[index];
+
+        if (!persistedTab) {
+          return [];
+        }
+
+        if (persistedTab.repositoryPath === null) {
+          return [{ ...createEmptyTab(index + 1), isPinned: persistedTab.isPinned }];
+        }
+
+        if (result.status !== "fulfilled" || result.value === null) {
           return [];
         }
 
         return [
           {
             ...createEmptyTab(index + 1),
+            isPinned: persistedTab.isPinned,
             title: result.value.name,
             repository: result.value,
           },
         ];
       });
 
-      const failedRepositoryCount = restoredRepositories.length - restoredTabs.length;
+      const failedRepositoryCount = persistedSession.tabs.filter((tab) => tab.repositoryPath !== null).length -
+        restoredTabs.filter((tab) => tab.repository !== null).length;
 
       if (restoredTabs.length === 0) {
         const fallbackTab = createEmptyTab(1);
@@ -576,7 +720,7 @@ function App() {
       }
 
       const boundedActiveRepositoryIndex = Math.min(
-        Math.max(persistedSession.activeRepositoryIndex, 0),
+        Math.max(persistedSession.activeTabIndex, 0),
         restoredTabs.length - 1,
       );
       const activeRepositoryId = restoredTabs[boundedActiveRepositoryIndex]?.id ?? restoredTabs[0].id;
@@ -596,7 +740,7 @@ function App() {
         };
       }
 
-      setTabs(nextTabs);
+      setTabs(sortTabsForDisplay(nextTabs));
       setActiveTabId(activeRepositoryId);
       setNextTabId(nextTabs.length + 1);
       hasRestoredSessionRef.current = true;
@@ -614,23 +758,17 @@ function App() {
       return;
     }
 
-    const repositories = tabs.flatMap((tab) => (tab.repository ? [tab.repository.path] : []));
-    const activeRepositoryIndex = tabs.reduce((matchIndex, tab, index) => {
-      if (!tab.repository) {
-        return matchIndex;
-      }
-
-      const repositoryIndex = tabs
-        .slice(0, index + 1)
-        .filter((candidateTab) => candidateTab.repository)
-        .length - 1;
-
-      return tab.id === activeTabId ? repositoryIndex : matchIndex;
-    }, 0);
+    const activeTabIndex = Math.max(
+      tabs.findIndex((tab) => tab.id === activeTabId),
+      0,
+    );
 
     const persistedSession: PersistedSession = {
-      repositories,
-      activeRepositoryIndex,
+      tabs: tabs.map((tab) => ({
+        repositoryPath: tab.repository?.path ?? null,
+        isPinned: tab.isPinned,
+      })),
+      activeTabIndex,
     };
 
     localStorage.setItem(PERSISTED_SESSION_KEY, JSON.stringify(persistedSession));
@@ -643,6 +781,46 @@ function App() {
 
     void refreshTabRepository(activeTab.id, { silent: true });
   }, [activeTab?.id, activeTab?.repository?.path, refreshTabRepository]);
+
+  useEffect(() => {
+    if (!tabContextMenu) {
+      return;
+    }
+
+    function handleEscapeKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setTabContextMenu(null);
+      }
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target;
+
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      if (tabContextMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      setTabContextMenu(null);
+    }
+
+    function handleWindowBlur() {
+      setTabContextMenu(null);
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("blur", handleWindowBlur);
+    window.addEventListener("keydown", handleEscapeKey);
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("blur", handleWindowBlur);
+      window.removeEventListener("keydown", handleEscapeKey);
+    };
+  }, [tabContextMenu]);
 
   useEffect(() => {
     if (!hasRestoredSessionRef.current) {
@@ -753,11 +931,20 @@ function App() {
               <button
                 key={tab.id}
                 type="button"
-                className={`h-8 px-4 flex items-center gap-2 text-sm transition-colors duration-150 ${tab.id === activeTabId ? "text-[#00D1FF] border-b-2 border-[#00D1FF] pb-1 hover:bg-[#192540]" : "text-[#dee5ff]/60 hover:bg-[#192540]"}`}
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = "move";
+                  handleDragStart(tab.id);
+                }}
+                onDragEnd={handleDragEnd}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={() => handleDropOnTab(tab.id)}
+                onContextMenu={(event) => handleTabContextMenu(event, tab.id)}
+                className={`h-8 px-3 flex items-center gap-2 text-sm transition-colors duration-150 rounded-t-md ${tab.id === activeTabId ? "text-[#00D1FF] border-b-2 border-[#00D1FF] pb-1 hover:bg-[#192540]" : "text-[#dee5ff]/60 hover:bg-[#192540]"} ${draggedTabId === tab.id ? "opacity-40" : ""}`}
                 onClick={() => setActiveTabId(tab.id)}
               >
-                <span className="material-symbols-outlined text-sm">terminal</span>
-                {tab.repository ? tab.repository.name : "Sin repo"}
+                <span className="material-symbols-outlined text-sm">{tab.isPinned ? "keep" : "terminal"}</span>
+                <span className="max-w-40 truncate">{tab.repository ? tab.repository.name : "Sin repo"}</span>
               </button>
             ))}
             <button
@@ -769,6 +956,42 @@ function App() {
               <span className="material-symbols-outlined text-lg">add</span>
             </button>
           </nav>
+          {tabContextMenu ? (
+            <div
+              ref={tabContextMenuRef}
+              className="fixed z-[100] min-w-40 rounded-md border border-[#1f325d] bg-[#091328] p-1 shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
+              style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
+              onClick={(event) => event.stopPropagation()}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-[#dee5ff] transition-colors hover:bg-[#192540]"
+                onClick={() => {
+                  handleTogglePinned(tabContextMenu.tabId);
+                  setTabContextMenu(null);
+                }}
+              >
+                <span className="material-symbols-outlined text-sm">
+                  {tabs.find((tab) => tab.id === tabContextMenu.tabId)?.isPinned ? "keep_off" : "keep"}
+                </span>
+                {tabs.find((tab) => tab.id === tabContextMenu.tabId)?.isPinned
+                  ? "Desfijar tab"
+                  : "Fijar tab"}
+              </button>
+              {!tabs.find((tab) => tab.id === tabContextMenu.tabId)?.isPinned ? (
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-[#ff9c9c] transition-colors hover:bg-[#192540]"
+                  onClick={() => handleCloseTab(tabContextMenu.tabId)}
+                  disabled={tabs.length === 1}
+                >
+                  <span className="material-symbols-outlined text-sm">close</span>
+                  Cerrar tab
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="flex items-center gap-4">
           <button className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#192540] transition-colors" onClick={() => void handleOpenRepository()}>
