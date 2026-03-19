@@ -534,172 +534,160 @@ function App() {
     void loadCommitDetail(activeTab.id, repository.path, selectedCommitSha);
   }, [activeTab?.id, repository, selectedCommitSha]);
 
-  const hasLocalChanges = Boolean(
-    repository &&
-      (repository.status.stagedChanges.length > 0 ||
-        repository.status.unstagedChanges.length > 0),
-  );
   const hasStagedChanges = Boolean(repository && repository.status.stagedChanges.length > 0);
-  const remoteOperationLabels = {
-    fetch: "Fetch",
-    pull: "Pull",
-    push: "Push",
-  };
-  const totalChanges =
-    (repository?.status.stagedChanges.length ?? 0) + (repository?.status.unstagedChanges.length ?? 0);
   const workingTreeSummary = repository ? summarizeWorkingTree(repository.status) : null;
   const isWorkingTreeSelected = selectedHistoryEntryId === WORKING_TREE_HISTORY_ENTRY_ID;
 
-  return (
-    <main className="desktop-shell">
-      <header className="window-chrome">
-        <div className="workspace-tabs">
-          {tabs.map((tab) => (
+    return (
+    <div className="bg-surface text-on-surface font-body overflow-hidden h-screen flex flex-col">
+      <header className="bg-[#060e20] text-[#00D1FF] font-headline tracking-tight flex justify-between items-center px-4 h-12 shrink-0 z-50 border-b border-outline-variant/10">
+        <div className="flex items-center gap-6 h-full">
+          <span className="text-xl font-bold text-[#00D1FF]">GitGud</span>
+          <nav className="flex h-full items-end gap-1">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className={`h-8 px-4 flex items-center gap-2 text-sm transition-colors duration-150 ${tab.id === activeTabId ? "text-[#00D1FF] border-b-2 border-[#00D1FF] pb-1 hover:bg-[#192540]" : "text-[#dee5ff]/60 hover:bg-[#192540]"}`}
+                onClick={() => setActiveTabId(tab.id)}
+              >
+                <span className="material-symbols-outlined text-sm">terminal</span>
+                {tab.repository ? tab.repository.name : "Sin repo"}
+              </button>
+            ))}
             <button
-              key={tab.id}
               type="button"
-              className={`workspace-tab${tab.id === activeTabId ? " workspace-tab--active" : ""}`}
-              onClick={() => setActiveTabId(tab.id)}
+              className="text-[#dee5ff]/40 h-8 px-2 flex items-center hover:text-primary"
+              onClick={handleCreateTab}
+              aria-label="New tab"
             >
-              <span className="workspace-tab__dot">⑂</span>
-              {tab.repository ? tab.repository.name : "Sin repo"}
+              <span className="material-symbols-outlined text-lg">add</span>
             </button>
-          ))}
-          <button
-            type="button"
-            className="workspace-tab workspace-tab--add"
-            onClick={handleCreateTab}
-            aria-label="Abrir una nueva pestaña"
-          >
-            +
+          </nav>
+        </div>
+        <div className="flex items-center gap-4">
+          <button className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-[#192540] transition-colors" onClick={() => void handleOpenRepository()}>
+            <span className="material-symbols-outlined text-sm">folder_open</span>
           </button>
         </div>
       </header>
 
-      <section className="command-bar">
-        <div className="repo-breadcrumb">
-          <div className="repo-breadcrumb__group">
-            <span className="meta-caption">repository</span>
-            <strong>{repository?.name ?? "sin cargar"}</strong>
-          </div>
-          <div className="repo-breadcrumb__group">
-            <span className="meta-caption">branch</span>
-            <strong>{repository?.currentBranch ?? "-"}</strong>
-          </div>
+      <section className="bg-surface-container h-10 border-b border-outline-variant/10 flex items-center justify-between px-4 shrink-0">
+        <div className="flex items-center gap-2">
+          {repository ? (
+            <div className="flex items-center bg-surface-container-low rounded p-0.5">
+              <button 
+                onClick={() => void handleRemoteOperation("fetch")} 
+                disabled={activeRemoteOperation !== null} 
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-label font-bold text-on-surface hover:bg-surface-container-highest transition-all ${activeRemoteOperation === 'fetch' ? 'opacity-50' : ''}`}
+              >
+                <span className="material-symbols-outlined text-secondary text-sm">download</span>FETCH
+              </button>
+              <div className="w-px h-4 bg-outline-variant/20 mx-1"></div>
+              <button 
+                onClick={() => void handleRemoteOperation("pull")} 
+                disabled={activeRemoteOperation !== null} 
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-label font-bold text-on-surface hover:bg-surface-container-highest transition-all ${activeRemoteOperation === 'pull' ? 'opacity-50' : ''}`}
+              >
+                <span className="material-symbols-outlined text-primary text-sm">vertical_align_bottom</span>PULL
+              </button>
+              <div className="w-px h-4 bg-outline-variant/20 mx-1"></div>
+              <button 
+                onClick={() => void handleRemoteOperation("push")} 
+                disabled={activeRemoteOperation !== null} 
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs font-label font-bold text-on-surface hover:bg-surface-container-highest transition-all ${activeRemoteOperation === 'push' ? 'opacity-50' : ''}`}
+              >
+                <span className="material-symbols-outlined text-tertiary text-sm">vertical_align_top</span>PUSH
+              </button>
+            </div>
+          ) : null}
+          {repository ? (
+             <>
+                <div className="h-6 w-px bg-outline-variant/20 mx-2"></div>
+                <button className="flex items-center gap-1.5 px-3 py-1 text-xs font-label font-medium bg-surface-container-highest/50 border border-outline-variant/20 rounded-full text-on-surface-variant hover:border-primary/40">
+                  <span className="material-symbols-outlined text-sm">mediation</span>{repository.currentBranch ?? "-"}
+                </button>
+                <button className="flex items-center gap-1.5 px-3 py-1 text-xs font-label font-medium text-on-surface-variant hover:text-on-surface" onClick={handleRefreshRepository}>
+                  <span className="material-symbols-outlined text-sm">sync</span>{isRefreshing ? "Syncing..." : "Sync"}
+                </button>
+             </>
+          ) : null}
         </div>
-
-        <div className="toolbar-actions">
-          <ToolbarButton
-            label={isRefreshing ? "Refreshing" : "Refresh"}
-            hint="Sync repository state"
-            onClick={handleRefreshRepository}
-            disabled={!repository || isRefreshing}
-          />
-          <ToolbarButton
-            label={isOpening ? "Opening" : "Open"}
-            hint="Select local repository"
-            onClick={() => void handleOpenRepository()}
-            disabled={isOpening}
-            primary={!repository}
-          />
-          {(["fetch", "pull", "push"] as const).map((operation) => (
-            <ToolbarButton
-              key={operation}
-              label={
-                activeRemoteOperation === operation
-                  ? `${remoteOperationLabels[operation]}…`
-                  : remoteOperationLabels[operation]
-              }
-              hint={operation}
-              onClick={() => void handleRemoteOperation(operation)}
-              disabled={!repository || activeRemoteOperation !== null}
-            />
-          ))}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 text-[10px] font-label text-on-surface-variant uppercase tracking-widest">
+            {repository ? (
+              <><span className="w-2 h-2 rounded-full bg-secondary"></span>Connected</>
+            ) : (
+              <><span className="w-2 h-2 rounded-full bg-outline-variant"></span>No Repo</>
+            )}
+          </div>
         </div>
       </section>
 
-      <div className="workspace-frame">
-        <aside className="activity-rail">
-          <div className="activity-rail__stack">
-            {NAV_ITEMS.map((item, index) => (
-              <button
-                key={item.label}
-                type="button"
-                className={`rail-button${index === 0 ? " rail-button--active" : ""}`}
-              >
-                <span className="rail-button__glyph">{item.glyph}</span>
-                <span className="rail-button__label">{item.count}</span>
-              </button>
-            ))}
+      <div className="flex flex-1 overflow-hidden">
+        <aside className="bg-[#091328] w-64 h-full flex flex-col pt-4 shrink-0 transition-all duration-200">
+          <div className="px-6 mb-6">
+            <h3 className="font-headline text-[10px] tracking-[0.2em] text-[#00D1FF] mb-1">WORKSPACE</h3>
+            <p className="font-body text-[11px] text-[#a3aac4]/60">Active: {repository ? repository.name : "None"}</p>
           </div>
+          <nav className="flex-1">
+            <ul className="space-y-1">
+              {NAV_ITEMS.map((item, index) => {
+                 let icon = "account_tree";
+                 if(item.label === "Historial") icon = "history";
+                 if(item.label === "Working tree") icon = "inventory_2";
+                 if(item.label === "Remoto") icon = "cloud_queue";
+                 if(item.label === "Ramas") icon = "call_split";
+                 return (
+                  <li key={item.label}>
+                    <button className={`w-full flex items-center justify-between px-6 py-3 font-medium text-sm transition-all ${index === 0 ? "text-[#00D1FF] border-l-2 border-[#00D1FF] bg-[#192540]" : "text-[#a3aac4] hover:bg-[#192540] hover:text-[#dee5ff]"}`}>
+                      <div className="flex items-center gap-4">
+                        <span className="material-symbols-outlined">{icon}</span>
+                        {item.label}
+                      </div>
+                      {item.count && <span className="text-[10px] bg-surface-container-highest px-1.5 rounded text-on-surface-variant font-label">{item.count}</span>}
+                    </button>
+                  </li>
+                 );
+              })}
+            </ul>
+          </nav>
         </aside>
 
-        <section className="history-pane">
-          <div className="history-toolbar">
-            <div className="history-toolbar__meta history-toolbar__meta--full">
-              <span className="table-heading">Branch / Tag</span>
-              <span className="table-heading">Graph</span>
-              <span className="table-heading table-heading--wide">Commit message</span>
-            </div>
-          </div>
-
-          {appFeedback ? (
-            <div className="pane-banner">
-              <FeedbackNotice
-                title={appFeedback.title}
-                message={appFeedback.message}
-                tone={appFeedback.tone}
-              />
-            </div>
-          ) : null}
+        <main className="flex-1 bg-surface-container-low flex overflow-hidden">
+          <div className="flex-1 overflow-y-auto relative bg-[#060e20]">
+            <div className="absolute left-10 inset-y-0 w-px bg-outline-variant/10"></div>
+            
+            {appFeedback && (
+              <div className="p-4 border-b border-outline-variant/10">
+                 <FeedbackNotice title={appFeedback.title} message={appFeedback.message} tone={appFeedback.tone} />
+              </div>
+            )}
 
             {repository ? (
-              <>
-                <div className="repository-strip">
-                  <div className="repository-strip__branch">
-                    <span className="branch-pill">{repository.currentBranch ?? "detached"}</span>
-                    <span className="repository-strip__path">{repository.path}</span>
-                  </div>
-                  <div className="repository-strip__head">
-                    <span>HEAD {repository.headShortSha ?? "none"}</span>
-                    <span>{repository.isBare ? "bare" : "working tree"}</span>
-                  </div>
-                </div>
-
-                {repository.recentCommits.length > 0 ? (
-                  <ul className="history-list">
-                    {workingTreeSummary && workingTreeSummary.total > 0 ? (
-                      <li>
-                        <button
-                          className={`history-row history-row--workspace${isWorkingTreeSelected ? " history-row--selected" : ""}`}
-                          type="button"
-                          onClick={handleSelectWorkingTree}
-                        >
-                          <div className="history-row__branch" />
-                          <div className="commit-graph" aria-hidden="true" />
-                          <div className="history-row__content history-row__content--workspace">
-                            <div className="workspace-stats">
-                              {workingTreeSummary.modified > 0 ? (
-                                <span className="workspace-stat workspace-stat--modified">
-                                  ✎ {workingTreeSummary.modified}
-                                </span>
-                              ) : null}
-                              {workingTreeSummary.added > 0 ? (
-                                <span className="workspace-stat workspace-stat--added">
-                                  + {workingTreeSummary.added}
-                                </span>
-                              ) : null}
-                              {workingTreeSummary.deleted > 0 ? (
-                                <span className="workspace-stat workspace-stat--deleted">
-                                  − {workingTreeSummary.deleted}
-                                </span>
-                              ) : null}
-                            </div>
-                          </div>
-                        </button>
-                      </li>
-                    ) : null}
-                    {repository.recentCommits.map((commit) => (
+              <div className="flex flex-col">
+                 {workingTreeSummary && workingTreeSummary.total > 0 && (
+                   <div 
+                     className={`flex items-center group cursor-pointer border-l-4 ${isWorkingTreeSelected ? 'border-primary bg-surface-container-highest/60' : 'border-transparent hover:bg-surface-container-highest/40'}`}
+                     onClick={handleSelectWorkingTree}
+                   >
+                     <div className="w-20 px-2 py-3 flex flex-col items-center shrink-0 relative">
+                        <div className="w-3 h-3 rounded-full bg-primary border-4 border-surface shadow-[0_0_10px_rgba(105,218,255,0.5)] z-10"></div>
+                     </div>
+                     <div className="flex-1 py-3 pr-6 border-b border-outline-variant/5">
+                        <div className="flex items-center justify-between mb-0.5">
+                           <h4 className="font-headline text-sm font-medium text-on-surface">Working Tree</h4>
+                        </div>
+                        <div className="flex items-center gap-4 mt-1">
+                           {workingTreeSummary.modified > 0 && <span className="text-[10px] font-label text-secondary-dim font-bold">✎ {workingTreeSummary.modified}</span>}
+                           {workingTreeSummary.added > 0 && <span className="text-[10px] font-label text-primary-dim font-bold">+ {workingTreeSummary.added}</span>}
+                           {workingTreeSummary.deleted > 0 && <span className="text-[10px] font-label text-error-dim font-bold">- {workingTreeSummary.deleted}</span>}
+                        </div>
+                     </div>
+                   </div>
+                 )}
+                 {repository.recentCommits.length > 0 ? (
+                   repository.recentCommits.map((commit) => (
                       <HistoryRow
                         key={commit.fullSha}
                         commit={commit}
@@ -707,196 +695,98 @@ function App() {
                         branchName={repository.currentBranch}
                         onSelect={handleSelectCommit}
                       />
-                    ))}
-                  </ul>
-                ) : (
-                  <EmptyWorkspace
-                    title="Sin historial todavía"
-                    copy="El repositorio está abierto, pero aún no hay commits visibles para poblar el grafo."
-                  />
-                )}
-              </>
+                   ))
+                 ) : (
+                   <div className="p-8">
+                     <EmptyWorkspace
+                       title="Sin historial todavía"
+                       copy="El repositorio está abierto, pero aún no hay commits visibles para poblar el grafo."
+                     />
+                   </div>
+                 )}
+              </div>
             ) : (
-              <EmptyWorkspace
-                title="Tab listo para un repositorio"
-                copy="Crea tantos tabs como necesites con `+` y carga un repositorio Git distinto en cada uno."
-                actionLabel={isOpening ? "Abriendo..." : "Abrir repositorio"}
-                onAction={() => void handleOpenRepository()}
-                isActionDisabled={isOpening}
-              />
+               <div className="p-8 h-full flex items-center justify-center">
+                 <EmptyWorkspace
+                  title="Tab listo para un repositorio"
+                  copy="Selecciona un repositorio local usando el icono de carpeta superior."
+                  actionLabel={isOpening ? "Abriendo..." : "Abrir repositorio"}
+                  onAction={() => void handleOpenRepository()}
+                  isActionDisabled={isOpening}
+                 />
+               </div>
             )}
-          </section>
+          </div>
 
-          <aside className="inspector-pane">
-            {!repository ? (
-              <section className="inspector-card inspector-card--summary">
-                <p className="inspector-copy">
-                  Selecciona un repositorio en este tab y luego un commit para ver su detalle aquí.
-                </p>
-              </section>
-            ) : isWorkingTreeSelected ? (
-              <>
-                <section className="inspector-card">
-                  <div className="inspector-card__header">
-                    <span className="meta-caption">new commit</span>
-                    <span className="summary-chip">{hasStagedChanges ? "ready" : "no staged"}</span>
-                  </div>
-
-                  <form
-                    className="stack-form"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void handleCreateCommit();
-                    }}
-                  >
-                    <label htmlFor="commit-message">Mensaje</label>
-                    <textarea
-                      id="commit-message"
-                      className="app-textarea"
-                      value={commitMessage}
-                      onChange={(event) =>
-                        patchTab(activeTab.id, { commitMessage: event.target.value })
-                      }
-                      placeholder="feat: describe los cambios staged"
-                      rows={4}
-                    />
-                    <button
-                      className="action-button action-button--wide"
-                      type="submit"
-                      disabled={!hasStagedChanges || isCommitting || !commitMessage.trim()}
-                    >
-                      {isCommitting ? "Creando commit..." : "Crear commit"}
-                    </button>
-                  </form>
-                </section>
-
-                <section className="inspector-card inspector-card--files">
-                  <div className="inspector-card__header">
-                    <span className="meta-caption">changed files</span>
-                    <span className="summary-chip">{hasLocalChanges ? "active" : "clean"}</span>
-                  </div>
-
-                  <div className="file-columns">
-                    <StatusColumn
-                      title="Staged"
-                      emptyMessage="No hay archivos staged."
-                      changes={repository.status.stagedChanges}
-                      bulkActionLabel="Unstage all"
-                      isBulkActionPending={activeStatusAction === "unstage-all"}
-                      onBulkAction={() =>
-                        void handleStatusAction(
-                          "unstage_all_files",
-                          "unstage-all",
-                          "No fue posible sacar todos los archivos del área de stage.",
-                        )
-                      }
-                      rowActionLabel="Unstage"
-                      activeActionKey={activeStatusAction}
-                      rowActionPrefix="unstage"
-                      onRowAction={(filePath) =>
-                        void handleStatusActionForPath(
-                          "unstage_file",
-                          "unstage",
-                          filePath,
-                          `No fue posible sacar "${filePath}" del área de stage.`,
-                        )
-                      }
-                    />
-                    <StatusColumn
-                      title="Unstaged"
-                      emptyMessage="No hay cambios unstaged."
-                      changes={repository.status.unstagedChanges}
-                      bulkActionLabel="Stage all"
-                      isBulkActionPending={activeStatusAction === "stage-all"}
-                      onBulkAction={() =>
-                        void handleStatusAction(
-                          "stage_all_files",
-                          "stage-all",
-                          "No fue posible hacer stage de todos los cambios visibles.",
-                        )
-                      }
-                      rowActionLabel="Stage"
-                      activeActionKey={activeStatusAction}
-                      rowActionPrefix="stage"
-                      onRowAction={(filePath) =>
-                        void handleStatusActionForPath(
-                          "stage_file",
-                          "stage",
-                          filePath,
-                          `No fue posible hacer stage de "${filePath}".`,
-                        )
-                      }
-                    />
-                  </div>
-                </section>
-              </>
-            ) : (
-              <section className="inspector-card inspector-card--summary">
-                <div className="inspector-card__header">
-                  <span className="meta-caption">commit detail</span>
-                  {selectedCommitSha ? (
-                    <span className="summary-chip">{selectedCommitSha.slice(0, 6)}</span>
-                  ) : (
-                    <span className="summary-chip">{totalChanges} files</span>
-                  )}
+          <aside className="w-[400px] bg-surface-container shrink-0 border-l border-outline-variant/10 flex flex-col overflow-y-auto">
+             {!repository ? (
+                <div className="p-6">
+                   <p className="text-sm text-on-surface-variant font-label">Selecciona un repositorio en este tab y un commit para ver su detalle aquí.</p>
                 </div>
-
-                {isLoadingCommitDetail && !selectedCommitDetail ? (
-                  <p className="muted-copy">Cargando detalle del commit seleccionado...</p>
-                ) : commitDetailError ? (
-                  <FeedbackNotice
-                    title="Detalle no disponible"
-                    message={commitDetailError}
-                    tone="error"
-                  />
-                ) : selectedCommitDetail ? (
-                  <CommitDetailPanel detail={selectedCommitDetail} />
-                ) : (
-                  <p className="inspector-copy">
-                    Selecciona un commit de la historia para ver su detalle aquí.
-                  </p>
-                )}
-              </section>
-            )}
+             ) : isWorkingTreeSelected ? (
+                <div className="flex flex-col gap-0">
+                   <div className="p-4 border-b border-outline-variant/10">
+                      <div className="flex items-center justify-between mb-4">
+                         <span className="text-[10px] font-label tracking-[0.1em] text-on-surface-variant uppercase font-bold">New Commit</span>
+                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold font-label tracking-wide ${hasStagedChanges ? 'bg-primary/20 text-primary' : 'bg-surface-container-low text-on-surface-variant'}`}>{hasStagedChanges ? "READY" : "NO STAGED"}</span>
+                      </div>
+                      <form className="flex flex-col gap-3" onSubmit={(e) => { e.preventDefault(); void handleCreateCommit(); }}>
+                         <div className="relative">
+                            <textarea
+                               className="w-full bg-surface-container-lowest border border-outline-variant/20 h-24 p-3 text-xs rounded-lg text-on-surface outline-none focus:border-primary/50 resize-none font-body placeholder:text-on-surface-variant/50"
+                               value={commitMessage}
+                               onChange={(e) => patchTab(activeTab.id, { commitMessage: e.target.value })}
+                               placeholder="feat: describe los cambios staged"
+                            />
+                         </div>
+                         <button type="submit" disabled={!hasStagedChanges || isCommitting || !commitMessage.trim()} className="w-full bg-gradient-to-br from-primary to-primary-container text-on-primary py-2 rounded-lg text-xs font-bold font-label hover:brightness-110 active:scale-95 transition-all disabled:opacity-50 disabled:grayscale disabled:cursor-not-allowed shadow-lg shadow-primary/10">
+                            {isCommitting ? "CREATING COMMIT..." : "COMMIT"}
+                         </button>
+                      </form>
+                   </div>
+                   
+                   <div className="flex flex-col flex-1 p-4 gap-6">
+                      <StatusColumn
+                          title="Staged Files"
+                          emptyMessage="No hay archivos staged."
+                          changes={repository.status.stagedChanges}
+                          bulkActionLabel="Unstage all"
+                          isBulkActionPending={activeStatusAction === "unstage-all"}
+                          onBulkAction={() => void handleStatusAction("unstage_all_files", "unstage-all", "No fue posible sacar todos los archivos.")}
+                          rowActionLabel="remove"
+                          activeActionKey={activeStatusAction}
+                          onRowAction={(filePath) => void handleStatusActionForPath("unstage_file", "unstage", filePath, `No unstage ${filePath}`)}
+                      />
+                      <StatusColumn
+                          title="Unstaged Changes"
+                          emptyMessage="No hay cambios unstaged."
+                          changes={repository.status.unstagedChanges}
+                          bulkActionLabel="Stage all"
+                          isBulkActionPending={activeStatusAction === "stage-all"}
+                          onBulkAction={() => void handleStatusAction("stage_all_files", "stage-all", "No fue posible hacer stage.")}
+                          rowActionLabel="add"
+                          activeActionKey={activeStatusAction}
+                          onRowAction={(filePath) => void handleStatusActionForPath("stage_file", "stage", filePath, `No stage ${filePath}`)}
+                      />
+                   </div>
+                </div>
+             ) : (
+                <>
+                   {isLoadingCommitDetail && !selectedCommitDetail ? (
+                      <div className="p-6"><p className="text-sm text-on-surface-variant font-label animate-pulse">Cargando...</p></div>
+                   ) : commitDetailError ? (
+                      <div className="p-6"><FeedbackNotice title="Error" message={commitDetailError} tone="error" /></div>
+                   ) : selectedCommitDetail ? (
+                      <CommitDetailPanel detail={selectedCommitDetail} />
+                   ) : (
+                      <div className="p-6"><p className="text-sm text-on-surface-variant font-label">Selecciona un commit.</p></div>
+                   )}
+                </>
+             )}
           </aside>
-        </div>
-
-      <footer className="status-footer">
-        <div className="status-footer__left">
-          <span className="status-led" />
-          {repository
-            ? `${repository.name} listo para trabajar`
-            : "Tab vacío: abre un repositorio o crea otro con +"}
-        </div>
-        <div className="status-footer__right">
-          <span>tabs: {tabs.length}</span>
-          <span>{repository?.currentBranch ?? "-"}</span>
-          <span>{repository?.headShortSha ?? "0000000"}</span>
-        </div>
-      </footer>
-    </main>
-  );
-}
-
-type ToolbarButtonProps = {
-  label: string;
-  hint: string;
-  onClick: () => void;
-  disabled: boolean;
-  primary?: boolean;
-};
-
-function ToolbarButton({ label, hint, onClick, disabled, primary = false }: ToolbarButtonProps) {
-  return (
-    <button
-      className={`toolbar-button${primary ? " toolbar-button--primary" : ""}`}
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={hint}
-    >
-      {label}
-    </button>
+        </main>
+      </div>
+    </div>
   );
 }
 
@@ -916,13 +806,15 @@ function EmptyWorkspace({
   isActionDisabled = false,
 }: EmptyWorkspaceProps) {
   return (
-    <div className="empty-workspace">
-      <span className="empty-workspace__eyebrow">gitgud desktop</span>
-      <h1>{title}</h1>
-      <p>{copy}</p>
+    <div className="flex flex-col items-center justify-center text-center p-8 gap-4 h-full">
+      <div className="w-16 h-16 rounded-full border border-outline-variant/20 bg-surface-container flex items-center justify-center text-outline-variant mb-2">
+         <span className="material-symbols-outlined text-3xl">inbox</span>
+      </div>
+      <h1 className="text-xl font-headline font-bold text-on-surface">{title}</h1>
+      <p className="text-sm text-on-surface-variant max-w-sm">{copy}</p>
       {actionLabel && onAction ? (
         <button
-          className="action-button action-button--hero"
+          className="mt-2 bg-surface-container-highest border border-outline-variant/20 hover:border-primary/40 text-on-surface px-6 py-2 rounded-lg text-sm font-label font-bold transition-all disabled:opacity-50"
           type="button"
           onClick={onAction}
           disabled={isActionDisabled}
@@ -943,7 +835,6 @@ type StatusColumnProps = {
   onBulkAction: () => void;
   rowActionLabel: string;
   activeActionKey: string | null;
-  rowActionPrefix: string;
   onRowAction: (filePath: string) => void;
 };
 
@@ -956,61 +847,64 @@ function StatusColumn({
   onBulkAction,
   rowActionLabel,
   activeActionKey,
-  rowActionPrefix,
   onRowAction,
 }: StatusColumnProps) {
   return (
-    <section className="file-column">
-      <div className="file-column__header">
-        <h3>{title}</h3>
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-[10px] font-label font-bold text-on-surface-variant tracking-[0.2em] uppercase">{title} <span className="ml-1 px-1.5 bg-surface-container-highest rounded-sm text-on-surface">{changes.length}</span></h3>
         <button
-          className="action-button action-button--subtle"
+          className="text-[10px] font-bold text-primary hover:text-primary-fixed uppercase tracking-wider disabled:opacity-50"
           type="button"
           onClick={onBulkAction}
           disabled={changes.length === 0 || isBulkActionPending || activeActionKey !== null}
         >
-          {isBulkActionPending ? "..." : bulkActionLabel}
+          {isBulkActionPending ? "Syncing..." : bulkActionLabel}
         </button>
       </div>
 
       {changes.length > 0 ? (
-        <ul className="file-list">
+        <ul className="flex flex-col gap-1">
           {changes.map((change) => (
-            <li key={`${title}-${change.path}`} className="file-row">
-              <div className="file-row__meta">
-                <span className={`change-kind change-kind--${change.kind}`}>
+            <li key={`${title}-${change.path}`} className="group flex items-center justify-between p-2 rounded hover:bg-surface-variant transition-colors">
+              <div className="flex items-center gap-3 overflow-hidden">
+                <span className={`text-[10px] font-bold font-label uppercase truncate ${change.kind === 'added' ? 'text-secondary' : change.kind === 'deleted' ? 'text-error' : 'text-tertiary-fixed'}`}>
                   {CHANGE_LABELS[change.kind]}
                 </span>
-                <p className="file-path">{change.path}</p>
+                <p className="text-xs font-body text-on-surface truncate">{change.path}</p>
               </div>
               <button
-                className="file-row__action"
+                className="opacity-0 group-hover:opacity-100 w-6 h-6 flex flex-shrink-0 items-center justify-center bg-surface-container border border-outline-variant/20 rounded hover:bg-surface-container-highest hover:text-primary text-on-surface-variant transition-all disabled:opacity-50"
                 type="button"
                 onClick={() => onRowAction(change.path)}
                 disabled={activeActionKey !== null}
+                title={rowActionLabel}
               >
-                {activeActionKey === `${rowActionPrefix}:${change.path}` ? "..." : rowActionLabel}
+                <span className="material-symbols-outlined text-xs">{rowActionLabel}</span>
               </button>
             </li>
           ))}
         </ul>
       ) : (
-        <p className="muted-copy">{emptyMessage}</p>
+        <p className="text-xs text-on-surface-variant p-2">{emptyMessage}</p>
       )}
-    </section>
+    </div>
   );
 }
 
 type FeedbackNoticeProps = FeedbackState;
 
 function FeedbackNotice({ title, message, tone }: FeedbackNoticeProps) {
+  const colors = {
+    error: "bg-error-container/20 border-error-container text-error",
+    warning: "bg-orange-500/10 border-orange-500/30 text-orange-400",
+    info: "bg-primary/10 border-primary/30 text-primary-fixed",
+    success: "bg-secondary/10 border-secondary/30 text-secondary-fixed",
+  };
   return (
-    <div
-      className={`feedback-card feedback-card--${tone}`}
-      role={tone === "error" ? "alert" : "status"}
-    >
-      <span className="feedback-label">{title}</span>
-      <p>{message}</p>
+    <div className={`p-3 border rounded-lg ${colors[tone] || colors.info}`} role={tone === "error" ? "alert" : "status"}>
+      <span className="block text-xs font-bold font-label uppercase tracking-widest mb-1">{title}</span>
+      <p className="text-xs">{message}</p>
     </div>
   );
 }
@@ -1029,26 +923,30 @@ const HistoryRow = memo(function HistoryRow({
   onSelect,
 }: HistoryRowProps) {
   return (
-    <li>
-      <button
-        className={`history-row${commit.isHead ? " history-row--head" : ""}${isSelected ? " history-row--selected" : ""}`}
-        type="button"
+      <div 
+        className={`flex group cursor-pointer border-l-4 ${isSelected ? "border-primary bg-surface-container-highest/60" : "border-transparent hover:bg-surface-container-highest/40"}`}
         onClick={() => onSelect(commit.fullSha)}
       >
-        <div className="history-row__branch">
-          {commit.isHead ? <span className="branch-pill">{branchName ?? "HEAD"}</span> : null}
+        <div className="w-20 px-0 flex flex-col items-center shrink-0 relative py-0">
+          <CommitGraph commit={commit} />
         </div>
-        <CommitGraph commit={commit} />
-        <div className="history-row__content">
-          <p className="history-summary">{commit.summary}</p>
-          <div className="history-row__meta">
-            <span>{commit.authorName}</span>
-            <span>{formatDateTime(commit.authoredAt)}</span>
-            <span>{commit.shortSha}</span>
+        <div className="flex-1 py-3 pr-6 border-b border-outline-variant/5">
+          <div className="flex items-center justify-between mb-0.5">
+            <h4 className="font-headline text-sm font-medium text-on-surface/80 group-hover:text-on-surface truncate pr-2">{commit.summary}</h4>
+            <span className="font-label text-[10px] text-on-surface-variant flex-shrink-0">{formatCompactDateTime(commit.authoredAt)}</span>
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            {commit.isHead && (
+              <div className="bg-surface-container-high border-l-2 border-primary px-1.5 py-[1px] rounded flex items-center gap-1">
+                <span className="material-symbols-outlined text-[10px] text-primary">call_split</span>
+                <span className="text-[9px] font-label text-primary font-bold">{branchName ?? "HEAD"}</span>
+              </div>
+            )}
+            <div className="text-[10px] font-label text-on-surface-variant truncate">{commit.authorName}</div>
+            <div className="text-[10px] font-mono text-outline-variant ml-auto font-medium">{commit.shortSha}</div>
           </div>
         </div>
-      </button>
-    </li>
+      </div>
   );
 });
 
@@ -1071,41 +969,44 @@ function CommitDetailPanel({ detail }: CommitDetailPanelProps) {
   }
 
   return (
-    <div className="commit-detail">
-      <div className="commit-detail__meta">
-        <div className="commit-detail__byline">
-          <span>{detail.authorName}</span>
-          <span>{formatCompactDateTime(detail.authoredAt)}</span>
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="p-6 border-b border-outline-variant/10 shrink-0">
+        <div className="flex items-start justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-surface-container-highest border border-primary/20 flex items-center justify-center text-primary font-bold text-lg font-headline">
+              {detail.authorName.charAt(0).toUpperCase()}
+            </div>
+            <div>
+              <div className="text-sm font-bold font-headline text-on-surface">{detail.authorName}</div>
+              <div className="text-[10px] font-label text-on-surface-variant">Commited {formatDateTime(detail.authoredAt)}</div>
+            </div>
+          </div>
+          <button
+            className={`bg-surface-container-highest px-2 py-1 rounded font-label text-[10px] font-bold tracking-widest border transition-colors ${copyState === 'copied' ? 'text-secondary border-secondary/50' : 'text-primary border-primary/20 hover:bg-primary/10'}`}
+            type="button"
+            onClick={() => void handleCopySha()}
+            title={copyState === "copied" ? "SHA copiado" : "Copiar SHA completo"}
+          >
+            {detail.fullSha.slice(0, 8)}
+          </button>
         </div>
-        <button
-          className={`commit-detail__sha${copyState === "copied" ? " commit-detail__sha--copied" : ""}`}
-          type="button"
-          onClick={() => void handleCopySha()}
-          title={copyState === "copied" ? "SHA copiado" : "Copiar SHA completo"}
-        >
-          {detail.fullSha.slice(0, 6)}
-        </button>
+        <h2 className="text-base font-bold font-headline text-on-surface leading-tight mb-2 whitespace-pre-wrap">{detail.message}</h2>
       </div>
 
-      <div className="commit-detail__message">
-        <p>{detail.message}</p>
-      </div>
-
-      <div className="detail-files">
-        <div className="detail-files__header">
-          <h3>Archivos modificados</h3>
-          <span>{detail.fileChanges.length}</span>
+      <div className="flex-1 overflow-y-auto p-4 px-6 relative">
+        <div className="flex items-center justify-between mb-4 sticky top-0 bg-surface-container backdrop-blur py-2 shadow-sm z-10">
+          <h3 className="text-[10px] font-label font-bold text-on-surface-variant tracking-[0.2em] uppercase">FILES CHANGED ({detail.fileChanges.length})</h3>
         </div>
 
         {detail.fileChanges.length > 0 ? (
-          <ul className="file-list">
+          <ul className="space-y-1">
             {detail.fileChanges.map((change) => (
-              <li key={`${detail.fullSha}-${change.path}`} className="file-row">
-                <div className="file-row__meta">
-                  <span className={`change-kind change-kind--${change.kind}`}>
+              <li key={`${detail.fullSha}-${change.path}`} className="group flex items-center justify-between p-2 rounded hover:bg-surface-variant transition-colors">
+                <div className="flex items-center gap-3">
+                  <span className={`text-[10px] font-bold uppercase ${change.kind === 'added' ? 'text-secondary' : change.kind === 'deleted' ? 'text-error' : 'text-tertiary-fixed'}`}>
                     {CHANGE_LABELS[change.kind]}
                   </span>
-                  <p className="file-path">
+                  <p className="text-xs font-body text-on-surface">
                     {change.previousPath ? `${change.previousPath} -> ${change.path}` : change.path}
                   </p>
                 </div>
@@ -1113,13 +1014,9 @@ function CommitDetailPanel({ detail }: CommitDetailPanelProps) {
             ))}
           </ul>
         ) : detail.fileListNotice ? (
-          <FeedbackNotice
-            title="Archivos no visibles"
-            message={detail.fileListNotice}
-            tone="warning"
-          />
+          <FeedbackNotice title="Archivos no visibles" message={detail.fileListNotice} tone="warning" />
         ) : (
-          <p className="muted-copy">No se reportaron archivos para este commit.</p>
+          <p className="text-xs text-on-surface-variant">No se reportaron archivos para este commit.</p>
         )}
       </div>
     </div>
@@ -1131,53 +1028,38 @@ type CommitGraphProps = {
 };
 
 const CommitGraph = memo(function CommitGraph({ commit }: CommitGraphProps) {
-  const laneWidth = 24;
-  const graphHeight = 52;
-  const topY = 6;
-  const nodeY = 18;
-  const bottomY = 46;
-  const width = Math.max(commit.visibleLaneCount, 1) * laneWidth;
+  const laneWidth = 16;
+  const graphHeight = 60;
+  const topY = 0;
+  const nodeY = 24;
+  const bottomY = graphHeight;
+  const width = Math.max(commit.visibleLaneCount, 1) * laneWidth + 24;
   const lanes = Array.from({ length: Math.max(commit.visibleLaneCount, 1) }, (_, lane) => lane);
-  const nodeX = commit.lane * laneWidth + laneWidth / 2;
+  const nodeX = commit.lane * laneWidth + 20;
+
+  const colors = ["#ff6f7e", "#6dfe9c", "#00cffc", "#f4b04d", "#bd7bfc"];
 
   return (
-    <div className="commit-graph" aria-hidden="true">
-      <svg width={width} height={graphHeight} viewBox={`0 0 ${width} ${graphHeight}`}>
+    <div className="flex justify-center h-full absolute inset-y-0 w-full" aria-hidden="true">
+      <svg width={width} height={graphHeight} viewBox={`0 0 ${width} ${graphHeight}`} className="overflow-visible h-full">
         {lanes.map((lane) => {
-          const x = lane * laneWidth + laneWidth / 2;
-
-          return (
-            <line
-              key={`lane-${commit.shortSha}-${lane}`}
-              x1={x}
-              y1={topY}
-              x2={x}
-              y2={bottomY}
-              className="commit-graph__lane"
-            />
-          );
+          const x = lane * laneWidth + 20;
+          return <line key={`lane-${commit.shortSha}-${lane}`} x1={x} y1={topY} x2={x} y2={bottomY} stroke={colors[lane % colors.length]} strokeWidth="2" strokeOpacity="0.4" fill="none" />;
         })}
 
         {commit.parentLanes.map((lane, index) => {
-          const parentX = lane * laneWidth + laneWidth / 2;
-          const path =
-            lane === commit.lane
+          const parentX = lane * laneWidth + 20;
+          const path = lane === commit.lane
               ? `M ${nodeX} ${nodeY} L ${parentX} ${bottomY}`
               : `M ${nodeX} ${nodeY} C ${nodeX} ${nodeY + 16}, ${parentX} ${bottomY - 16}, ${parentX} ${bottomY}`;
-
-          return (
-            <path
-              key={`edge-${commit.shortSha}-${lane}-${index}`}
-              d={path}
-              className="commit-graph__edge"
-            />
-          );
+          return <path key={`edge-${commit.shortSha}-${lane}-${index}`} d={path} stroke={colors[commit.lane % colors.length]} strokeWidth="2" strokeOpacity="0.8" fill="none" />;
         })}
 
         {commit.isHead ? (
-          <circle cx={nodeX} cy={nodeY} r={8.5} className="commit-graph__head-halo" />
-        ) : null}
-        <circle cx={nodeX} cy={nodeY} r={5.5} className="commit-graph__node" />
+           <circle cx={nodeX} cy={nodeY} r={6} fill="#0d1424" stroke={colors[commit.lane % colors.length]} strokeWidth="3" className="shadow-[0_0_10px_rgba(105,218,255,0.5)]" />
+        ) : (
+           <circle cx={nodeX} cy={nodeY} r={4} fill={colors[commit.lane % colors.length]} stroke="#060e20" strokeWidth="2" />
+        )}
       </svg>
     </div>
   );
