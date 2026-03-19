@@ -43,6 +43,7 @@ struct RepositoryState {
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct CommitSummary {
+    full_sha: String,
     short_sha: String,
     summary: String,
     author_name: String,
@@ -302,6 +303,7 @@ fn recent_commits(repository: &Repository) -> Result<Vec<CommitSummary>, String>
             .max(lane + 1);
 
         commits.push(CommitSummary {
+            full_sha: commit.id().to_string(),
             short_sha: short_oid(commit.id()),
             summary: display_commit_summary(&commit),
             author_name: display_author_name(&commit),
@@ -740,6 +742,10 @@ mod tests {
         assert!(state.recent_commits.len() >= 2);
         assert_eq!(state.recent_commits[0].summary, "Save staged work");
         assert_eq!(state.head_short_sha.as_deref(), Some(state.recent_commits[0].short_sha.as_str()));
+        assert_eq!(
+            state.recent_commits[0].full_sha,
+            repository.head().expect("head").target().expect("head target").to_string()
+        );
         assert!(state.recent_commits[0].is_head);
     }
 

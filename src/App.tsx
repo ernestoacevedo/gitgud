@@ -33,6 +33,7 @@ type RepositoryState = {
 };
 
 type CommitSummary = {
+  fullSha: string;
   shortSha: string;
   summary: string;
   authorName: string;
@@ -198,10 +199,10 @@ function App() {
     }
 
     const nextSelectedCommit = repository.recentCommits.some(
-      (commit) => commit.shortSha === selectedCommitSha,
+      (commit) => commit.fullSha === selectedCommitSha,
     )
       ? selectedCommitSha
-      : repository.recentCommits[0].shortSha;
+      : repository.recentCommits[0].fullSha;
 
     if (nextSelectedCommit !== selectedCommitSha) {
       setSelectedCommitSha(nextSelectedCommit);
@@ -437,8 +438,8 @@ function App() {
                 <HistoryRow
                   key={commit.shortSha}
                   commit={commit}
-                  isSelected={commit.shortSha === selectedCommitSha}
-                  onSelect={() => setSelectedCommitSha(commit.shortSha)}
+                  isSelected={commit.fullSha === selectedCommitSha}
+                  onSelect={() => setSelectedCommitSha(commit.fullSha)}
                 />
               ))}
             </ul>
