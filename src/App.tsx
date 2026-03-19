@@ -75,6 +75,14 @@ type CommitFileChange = {
   kind: ChangeKind;
 };
 
+type FeedbackTone = "error" | "warning" | "info" | "success";
+
+type FeedbackState = {
+  title: string;
+  message: string;
+  tone: FeedbackTone;
+};
+
 const CHANGE_LABELS: Record<ChangeKind, string> = {
   added: "Nuevo",
   modified: "Modificado",
@@ -86,9 +94,10 @@ const CHANGE_LABELS: Record<ChangeKind, string> = {
 
 function App() {
   const [repository, setRepository] = useState<RepositoryState | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [appFeedback, setAppFeedback] = useState<FeedbackState | null>(null);
   const [isOpening, setIsOpening] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [activeStatusAction, setActiveStatusAction] = useState<string | null>(null);
   const [selectedBranchName, setSelectedBranchName] = useState("");
   const [newBranchName, setNewBranchName] = useState("");
   const [isCheckingOutBranch, setIsCheckingOutBranch] = useState(false);
@@ -104,17 +113,25 @@ function App() {
   const [isLoadingCommitDetail, setIsLoadingCommitDetail] = useState(false);
   const [commitDetailError, setCommitDetailError] = useState<string | null>(null);
 
+  function showErrorFeedback(title: string, error: unknown, fallbackMessage: string) {
+    setAppFeedback({
+      title,
+      message: error instanceof Error ? error.message : fallbackMessage,
+      tone: "error",
+    });
+  }
+
   async function loadRepository(path: string, command: "open_repository" | "refresh_repository") {
     const nextRepository = await invoke<RepositoryState>(command, { path });
     setRepository(nextRepository);
     setSelectedBranchName(nextRepository.currentBranch ?? nextRepository.localBranches[0] ?? "");
-    setErrorMessage(null);
+    setAppFeedback(null);
     setRemoteStatusMessage(null);
   }
 
   async function handleOpenRepository() {
     setIsOpening(true);
-    setErrorMessage(null);
+    setAppFeedback(null);
 
     try {
       const selectedPath = await open({
@@ -130,10 +147,10 @@ function App() {
       await loadRepository(selectedPath, "open_repository");
     } catch (error) {
       setRepository(null);
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "No fue posible abrir el repositorio seleccionado.",
+      showErrorFeedback(
+        "Repositorio no disponible",
+        error,
+        "No fue posible abrir el repositorio seleccionado.",
       );
     } finally {
       setIsOpening(false);
@@ -150,13 +167,62 @@ function App() {
     try {
       await loadRepository(repository.path, "refresh_repository");
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "No fue posible refrescar el estado del repositorio.",
+      showErrorFeedback(
+        "No se pudo refrescar",
+        error,
+        "No fue posible refrescar el estado del repositorio.",
       );
     } finally {
       setIsRefreshing(false);
+    }
+  }
+
+  async function handleStatusAction(command: string, actionKey: string, fallbackMessage: string) {
+    if (!repository) {
+      return;
+    }
+
+    setActiveStatusAction(actionKey);
+
+    try {
+      const nextRepository = await invoke<RepositoryState>(command, {
+        path: repository.path,
+      });
+
+      setRepository(nextRepository);
+      setAppFeedback(null);
+    } catch (error) {
+      showErrorFeedback("No se pudo actualizar el stage", error, fallbackMessage);
+    } finally {
+      setActiveStatusAction(null);
+    }
+  }
+
+  async function handleStatusActionForPath(
+    command: string,
+    actionPrefix: string,
+    filePath: string,
+    fallbackMessage: string,
+  ) {
+    if (!repository) {
+      return;
+    }
+
+    const actionKey = `${actionPrefix}:${filePath}`;
+    setActiveStatusAction(actionKey);
+
+    try {
+      const nextRepository = await invoke<RepositoryState>(command, {
+        path: repository.path,
+        filePath,
+      });
+
+      setRepository(nextRepository);
+      setAppFeedback(null);
+    } catch (error) {
+      showErrorFeedback("No se pudo actualizar el stage", error, fallbackMessage);
+    } finally {
+      setActiveStatusAction(null);
     }
   }
 
@@ -175,12 +241,12 @@ function App() {
 
       setRepository(nextRepository);
       setCommitMessage("");
-      setErrorMessage(null);
+      setAppFeedback(null);
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "No fue posible crear el commit en el repositorio activo.",
+      showErrorFeedback(
+        "Commit rechazado",
+        error,
+        "No fue posible crear el commit en el repositorio activo.",
       );
     } finally {
       setIsCommitting(false);
@@ -202,12 +268,12 @@ function App() {
 
       setRepository(nextRepository);
       setSelectedBranchName(nextRepository.currentBranch ?? nextRepository.localBranches[0] ?? "");
-      setErrorMessage(null);
+      setAppFeedback(null);
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "No fue posible cambiar a la rama seleccionada.",
+      showErrorFeedback(
+        "Checkout rechazado",
+        error,
+        "No fue posible cambiar a la rama seleccionada.",
       );
     } finally {
       setIsCheckingOutBranch(false);
@@ -221,7 +287,11 @@ function App() {
 
     const trimmedBranchName = newBranchName.trim();
     if (!trimmedBranchName) {
-      setErrorMessage("Debes ingresar un nombre para la nueva rama.");
+      setAppFeedback({
+        title: "Nombre de rama requerido",
+        message: "Debes ingresar un nombre para la nueva rama.",
+        tone: "error",
+      });
       return;
     }
 
@@ -236,12 +306,12 @@ function App() {
       setRepository(nextRepository);
       setNewBranchName("");
       setSelectedBranchName(nextRepository.currentBranch ?? nextRepository.localBranches[0] ?? "");
-      setErrorMessage(null);
+      setAppFeedback(null);
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : "No fue posible crear la nueva rama.",
+      showErrorFeedback(
+        "No se pudo crear la rama",
+        error,
+        "No fue posible crear la nueva rama.",
       );
     } finally {
       setIsCreatingBranch(false);
@@ -268,14 +338,14 @@ function App() {
       });
 
       setRepository(nextRepository);
-      setErrorMessage(null);
+      setAppFeedback(null);
       setRemoteStatusMessage(`Se completó ${labels[operation]} y el repositorio fue actualizado.`);
     } catch (error) {
       setRemoteStatusMessage(null);
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : `No fue posible ejecutar ${labels[operation]} en el repositorio activo.`,
+      showErrorFeedback(
+        `No se pudo ejecutar ${labels[operation]}`,
+        error,
+        `No fue posible ejecutar ${labels[operation]} en el repositorio activo.`,
       );
     } finally {
       setActiveRemoteOperation(null);
@@ -385,11 +455,12 @@ function App() {
           </span>
         </div>
 
-        {errorMessage ? (
-          <div className="feedback-card feedback-card--error" role="alert">
-            <span className="feedback-label">Error</span>
-            <p>{errorMessage}</p>
-          </div>
+        {appFeedback ? (
+          <FeedbackNotice
+            title={appFeedback.title}
+            message={appFeedback.message}
+            tone={appFeedback.tone}
+          />
         ) : null}
       </section>
 
@@ -485,12 +556,52 @@ function App() {
                 helper="Listo para el próximo commit."
                 emptyMessage="No hay cambios staged."
                 changes={repository.status.stagedChanges}
+                bulkActionLabel="Sacar todo del stage"
+                isBulkActionPending={activeStatusAction === "unstage-all"}
+                onBulkAction={() =>
+                  void handleStatusAction(
+                    "unstage_all_files",
+                    "unstage-all",
+                    "No fue posible sacar todos los archivos del área de stage.",
+                  )
+                }
+                rowActionLabel="Sacar del stage"
+                activeActionKey={activeStatusAction}
+                rowActionPrefix="unstage"
+                onRowAction={(filePath) =>
+                  void handleStatusActionForPath(
+                    "unstage_file",
+                    "unstage",
+                    filePath,
+                    `No fue posible sacar \"${filePath}\" del área de stage.`,
+                  )
+                }
               />
               <StatusColumn
                 title="Unstaged"
                 helper="Cambios detectados en el working tree."
                 emptyMessage="No hay cambios unstaged."
                 changes={repository.status.unstagedChanges}
+                bulkActionLabel="Stage de todo"
+                isBulkActionPending={activeStatusAction === "stage-all"}
+                onBulkAction={() =>
+                  void handleStatusAction(
+                    "stage_all_files",
+                    "stage-all",
+                    "No fue posible hacer stage de todos los cambios visibles.",
+                  )
+                }
+                rowActionLabel="Agregar al stage"
+                activeActionKey={activeStatusAction}
+                rowActionPrefix="stage"
+                onRowAction={(filePath) =>
+                  void handleStatusActionForPath(
+                    "stage_file",
+                    "stage",
+                    filePath,
+                    `No fue posible hacer stage de \"${filePath}\".`,
+                  )
+                }
               />
             </div>
           ) : (
@@ -801,10 +912,11 @@ function App() {
               Cargando metadata y archivos del commit seleccionado...
             </p>
           ) : commitDetailError ? (
-            <div className="feedback-card feedback-card--error" role="alert">
-              <span className="feedback-label">Detalle no disponible</span>
-              <p>{commitDetailError}</p>
-            </div>
+            <FeedbackNotice
+              title="Detalle no disponible"
+              message={commitDetailError}
+              tone="error"
+            />
           ) : selectedCommitDetail ? (
             <CommitDetailPanel detail={selectedCommitDetail} />
           ) : (
@@ -823,6 +935,13 @@ type StatusColumnProps = {
   helper: string;
   emptyMessage: string;
   changes: ChangedFile[];
+  bulkActionLabel: string;
+  isBulkActionPending: boolean;
+  onBulkAction: () => void;
+  rowActionLabel: string;
+  activeActionKey: string | null;
+  rowActionPrefix: string;
+  onRowAction: (filePath: string) => void;
 };
 
 function StatusColumn({
@@ -830,12 +949,29 @@ function StatusColumn({
   helper,
   emptyMessage,
   changes,
+  bulkActionLabel,
+  isBulkActionPending,
+  onBulkAction,
+  rowActionLabel,
+  activeActionKey,
+  rowActionPrefix,
+  onRowAction,
 }: StatusColumnProps) {
   return (
     <section className="change-column">
       <div className="change-column__header">
-        <h2>{title}</h2>
-        <p>{helper}</p>
+        <div>
+          <h2>{title}</h2>
+          <p>{helper}</p>
+        </div>
+        <button
+          className="secondary-button change-column__action"
+          type="button"
+          onClick={onBulkAction}
+          disabled={changes.length === 0 || isBulkActionPending || activeActionKey !== null}
+        >
+          {isBulkActionPending ? "Procesando..." : bulkActionLabel}
+        </button>
       </div>
 
       {changes.length > 0 ? (
@@ -848,6 +984,16 @@ function StatusColumn({
                 </span>
                 <p className="change-path">{change.path}</p>
               </div>
+              <button
+                className="secondary-button change-row__action"
+                type="button"
+                onClick={() => onRowAction(change.path)}
+                disabled={activeActionKey !== null}
+              >
+                {activeActionKey === `${rowActionPrefix}:${change.path}`
+                  ? "Procesando..."
+                  : rowActionLabel}
+              </button>
             </li>
           ))}
         </ul>
@@ -855,6 +1001,17 @@ function StatusColumn({
         <p className="placeholder-copy">{emptyMessage}</p>
       )}
     </section>
+  );
+}
+
+type FeedbackNoticeProps = FeedbackState;
+
+function FeedbackNotice({ title, message, tone }: FeedbackNoticeProps) {
+  return (
+    <div className={`feedback-card feedback-card--${tone}`} role={tone === "error" ? "alert" : "status"}>
+      <span className="feedback-label">{title}</span>
+      <p>{message}</p>
+    </div>
   );
 }
 
@@ -966,10 +1123,11 @@ function CommitDetailPanel({ detail }: CommitDetailPanelProps) {
             ))}
           </ul>
         ) : detail.fileListNotice ? (
-          <div className="feedback-card feedback-card--warning" role="status">
-            <span className="feedback-label">Archivos no visibles</span>
-            <p>{detail.fileListNotice}</p>
-          </div>
+          <FeedbackNotice
+            title="Archivos no visibles"
+            message={detail.fileListNotice}
+            tone="warning"
+          />
         ) : (
           <p className="placeholder-copy">
             No se reportaron archivos para este commit.

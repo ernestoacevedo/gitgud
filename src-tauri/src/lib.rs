@@ -1,4 +1,7 @@
-use git2::{BranchType, Commit, Delta, DiffOptions, Repository, Signature, Status, StatusOptions};
+use git2::{
+    BranchType, Commit, Delta, DiffOptions, IndexAddOption, Repository, Signature, Status,
+    StatusOptions,
+};
 use serde::Serialize;
 use std::path::Path;
 use std::process::Command;
@@ -304,6 +307,114 @@ fn repository_status(repository: &Repository) -> Result<RepositoryStatus, String
         staged_changes,
         unstaged_changes,
     })
+}
+
+fn open_repository_for_command(path: &str) -> Result<Repository, String> {
+    Repository::open(Path::new(path)).map_err(|error| {
+        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
+    })
+}
+
+fn stage_file_in_repository(repository: &Repository, file_path: &str) -> Result<(), String> {
+    let trimmed_path = file_path.trim();
+    if trimmed_path.is_empty() {
+        return Err("Debes indicar un archivo valido para hacer stage.".to_string());
+    }
+
+    let status = repository
+        .status_file(Path::new(trimmed_path))
+        .map_err(|error| format!("No fue posible leer el estado de \"{trimmed_path}\": {error}"))?;
+    let mut index = repository
+        .index()
+        .map_err(|error| format!("No fue posible abrir el index del repositorio: {error}"))?;
+
+    if status.is_wt_deleted() {
+        index
+            .remove_path(Path::new(trimmed_path))
+            .map_err(|error| {
+                format!("No fue posible hacer stage de \"{trimmed_path}\": {error}")
+            })?;
+    } else {
+        index.add_path(Path::new(trimmed_path)).map_err(|error| {
+            format!("No fue posible hacer stage de \"{trimmed_path}\": {error}")
+        })?;
+    }
+
+    index
+        .write()
+        .map_err(|error| format!("No fue posible escribir el index del repositorio: {error}"))?;
+
+    Ok(())
+}
+
+fn stage_all_files_in_repository(repository: &Repository) -> Result<(), String> {
+    let mut index = repository
+        .index()
+        .map_err(|error| format!("No fue posible abrir el index del repositorio: {error}"))?;
+    index
+        .add_all(["*"], IndexAddOption::DEFAULT, None)
+        .map_err(|error| {
+            format!("No fue posible hacer stage de todos los cambios visibles: {error}")
+        })?;
+    index
+        .write()
+        .map_err(|error| format!("No fue posible escribir el index del repositorio: {error}"))?;
+
+    Ok(())
+}
+
+fn unstage_paths_in_repository(repository: &Repository, paths: &[&Path]) -> Result<(), String> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+
+    let head_object = repository
+        .head()
+        .ok()
+        .and_then(|head| head.peel(git2::ObjectType::Commit).ok());
+
+    if let Some(head_object) = head_object.as_ref() {
+        repository
+            .reset_default(Some(head_object), paths.iter().copied())
+            .map_err(|error| format!("No fue posible sacar archivos del area de stage: {error}"))?;
+        return Ok(());
+    }
+
+    let mut index = repository
+        .index()
+        .map_err(|error| format!("No fue posible abrir el index del repositorio: {error}"))?;
+    for path in paths {
+        index.remove_path(path).map_err(|error| {
+            format!(
+                "No fue posible sacar \"{}\" del area de stage: {error}",
+                path.display()
+            )
+        })?;
+    }
+    index
+        .write()
+        .map_err(|error| format!("No fue posible escribir el index del repositorio: {error}"))
+}
+
+fn unstage_file_in_repository(repository: &Repository, file_path: &str) -> Result<(), String> {
+    let trimmed_path = file_path.trim();
+    if trimmed_path.is_empty() {
+        return Err("Debes indicar un archivo valido para sacar del stage.".to_string());
+    }
+
+    let target = Path::new(trimmed_path);
+    unstage_paths_in_repository(repository, &[target])
+}
+
+fn unstage_all_files_in_repository(repository: &Repository) -> Result<(), String> {
+    let status = repository_status(repository)?;
+    let staged_paths = status
+        .staged_changes
+        .iter()
+        .map(|change| Path::new(change.path.as_str()))
+        .collect::<Vec<_>>();
+
+    unstage_paths_in_repository(repository, &staged_paths)
 }
 
 fn recent_commits(repository: &Repository) -> Result<Vec<CommitSummary>, String> {
@@ -787,64 +898,78 @@ fn refresh_repository(path: String) -> Result<RepositoryState, String> {
 
 #[tauri::command]
 fn create_commit(path: String, message: String) -> Result<RepositoryState, String> {
-    let repository = Repository::open(Path::new(&path)).map_err(|error| {
-        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
-    })?;
+    let repository = open_repository_for_command(&path)?;
     create_commit_for_repository(&repository, &message)?;
     repository_state_from_path(Path::new(&path))
 }
 
 #[tauri::command]
 fn checkout_branch(path: String, branch_name: String) -> Result<RepositoryState, String> {
-    let repository = Repository::open(Path::new(&path)).map_err(|error| {
-        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
-    })?;
+    let repository = open_repository_for_command(&path)?;
     checkout_local_branch_for_repository(&repository, &branch_name)?;
     repository_state_from_path(Path::new(&path))
 }
 
 #[tauri::command]
 fn create_branch(path: String, branch_name: String) -> Result<RepositoryState, String> {
-    let repository = Repository::open(Path::new(&path)).map_err(|error| {
-        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
-    })?;
+    let repository = open_repository_for_command(&path)?;
     create_branch_for_repository(&repository, &branch_name)?;
     repository_state_from_path(Path::new(&path))
 }
 
 #[tauri::command]
 fn fetch_remote(path: String) -> Result<RepositoryState, String> {
-    let repository = Repository::open(Path::new(&path)).map_err(|error| {
-        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
-    })?;
+    let repository = open_repository_for_command(&path)?;
     execute_remote_operation(&repository, RemoteOperation::Fetch)?;
     repository_state_from_path(Path::new(&path))
 }
 
 #[tauri::command]
 fn pull_remote(path: String) -> Result<RepositoryState, String> {
-    let repository = Repository::open(Path::new(&path)).map_err(|error| {
-        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
-    })?;
+    let repository = open_repository_for_command(&path)?;
     execute_remote_operation(&repository, RemoteOperation::Pull)?;
     repository_state_from_path(Path::new(&path))
 }
 
 #[tauri::command]
 fn push_remote(path: String) -> Result<RepositoryState, String> {
-    let repository = Repository::open(Path::new(&path)).map_err(|error| {
-        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
-    })?;
+    let repository = open_repository_for_command(&path)?;
     execute_remote_operation(&repository, RemoteOperation::Push)?;
     repository_state_from_path(Path::new(&path))
 }
 
 #[tauri::command]
 fn read_commit_detail(path: String, commit_sha: String) -> Result<CommitDetail, String> {
-    let repository = Repository::open(Path::new(&path)).map_err(|error| {
-        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
-    })?;
+    let repository = open_repository_for_command(&path)?;
     commit_detail(&repository, &commit_sha)
+}
+
+#[tauri::command]
+fn stage_file(path: String, file_path: String) -> Result<RepositoryState, String> {
+    let repository = open_repository_for_command(&path)?;
+    stage_file_in_repository(&repository, &file_path)?;
+    repository_state_from_path(Path::new(&path))
+}
+
+#[tauri::command]
+fn unstage_file(path: String, file_path: String) -> Result<RepositoryState, String> {
+    let repository = open_repository_for_command(&path)?;
+    unstage_file_in_repository(&repository, &file_path)?;
+    repository_state_from_path(Path::new(&path))
+}
+
+#[tauri::command]
+fn stage_all_files(path: String) -> Result<RepositoryState, String> {
+    let repository = open_repository_for_command(&path)?;
+    stage_all_files_in_repository(&repository)?;
+    repository_state_from_path(Path::new(&path))
+}
+
+#[tauri::command]
+fn unstage_all_files(path: String) -> Result<RepositoryState, String> {
+    let repository = open_repository_for_command(&path)?;
+    unstage_all_files_in_repository(&repository)?;
+    repository_state_from_path(Path::new(&path))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -855,6 +980,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_repository,
             refresh_repository,
+            stage_file,
+            unstage_file,
+            stage_all_files,
+            unstage_all_files,
             create_commit,
             checkout_branch,
             create_branch,
@@ -872,7 +1001,9 @@ mod tests {
     use super::{
         checkout_local_branch_for_repository, commit_detail, create_branch_for_repository,
         create_commit_for_repository, ensure_valid_branch_name, execute_remote_operation,
-        repository_state_from_path, ChangeKind, ChangedFile, RemoteOperation,
+        repository_state_from_path, stage_all_files_in_repository, stage_file_in_repository,
+        unstage_all_files_in_repository, unstage_file_in_repository, ChangeKind, ChangedFile,
+        RemoteOperation,
     };
     use git2::{BranchType, IndexAddOption, Repository, Signature};
     use std::fs;
@@ -1150,6 +1281,75 @@ mod tests {
                 kind: ChangeKind::Modified,
             }]
         );
+    }
+
+    #[test]
+    fn stages_and_unstages_individual_files() {
+        let directory = tempdir().expect("tempdir");
+        let repository = Repository::init(directory.path()).expect("repo init");
+        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+
+        fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
+        commit_all(&repository, &signature, "init");
+
+        fs::write(directory.path().join("tracked.txt"), "base\nworktree\n")
+            .expect("modify tracked");
+
+        stage_file_in_repository(&repository, "tracked.txt").expect("stage file");
+        let staged_state = repository_state_from_path(directory.path()).expect("state after stage");
+        assert!(staged_state.status.unstaged_changes.is_empty());
+        assert!(staged_state.status.staged_changes.contains(&ChangedFile {
+            path: "tracked.txt".to_string(),
+            kind: ChangeKind::Modified,
+        }));
+
+        unstage_file_in_repository(&repository, "tracked.txt").expect("unstage file");
+        let unstaged_state =
+            repository_state_from_path(directory.path()).expect("state after unstage");
+        assert!(unstaged_state.status.staged_changes.is_empty());
+        assert!(unstaged_state
+            .status
+            .unstaged_changes
+            .contains(&ChangedFile {
+                path: "tracked.txt".to_string(),
+                kind: ChangeKind::Modified,
+            }));
+    }
+
+    #[test]
+    fn stages_and_unstages_all_visible_changes() {
+        let directory = tempdir().expect("tempdir");
+        let repository = Repository::init(directory.path()).expect("repo init");
+        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+
+        fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
+        commit_all(&repository, &signature, "init");
+
+        fs::write(directory.path().join("tracked.txt"), "base\nupdated\n").expect("update tracked");
+        fs::write(directory.path().join("added.txt"), "new file\n").expect("write added");
+
+        stage_all_files_in_repository(&repository).expect("stage all");
+        let staged_state = repository_state_from_path(directory.path()).expect("staged state");
+        assert_eq!(staged_state.status.unstaged_changes.len(), 0);
+        assert_eq!(staged_state.status.staged_changes.len(), 2);
+
+        unstage_all_files_in_repository(&repository).expect("unstage all");
+        let unstaged_state = repository_state_from_path(directory.path()).expect("unstaged state");
+        assert_eq!(unstaged_state.status.staged_changes.len(), 0);
+        assert_eq!(unstaged_state.status.unstaged_changes.len(), 2);
+    }
+
+    #[test]
+    fn validates_stage_and_unstage_targets() {
+        let directory = tempdir().expect("tempdir");
+        let repository = Repository::init(directory.path()).expect("repo init");
+
+        let stage_error = stage_file_in_repository(&repository, " ").expect_err("stage error");
+        let unstage_error =
+            unstage_file_in_repository(&repository, " ").expect_err("unstage error");
+
+        assert!(stage_error.contains("archivo valido"));
+        assert!(unstage_error.contains("archivo valido"));
     }
 
     #[test]

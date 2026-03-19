@@ -199,6 +199,16 @@ textarea {
   border-color: rgba(255, 208, 120, 0.26);
 }
 
+.feedback-card--info {
+  background: rgba(28, 86, 124, 0.22);
+  border-color: rgba(129, 198, 255, 0.24);
+}
+
+.feedback-card--success {
+  background: rgba(28, 110, 76, 0.2);
+  border-color: rgba(109, 223, 176, 0.24);
+}
+
 .feedback-label {
   display: inline-block;
   margin-bottom: 8px;
@@ -324,6 +334,13 @@ textarea {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.change-column__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
 .change-column__header h2 {
   margin: 0;
   font-size: 1.6rem;
@@ -337,6 +354,10 @@ textarea {
   line-height: 1.5;
 }
 
+.change-column__action {
+  flex-shrink: 0;
+}
+
 .change-list {
   list-style: none;
   margin: 20px 0 0;
@@ -346,10 +367,22 @@ textarea {
 }
 
 .change-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
   padding: 16px 18px;
   border-radius: 18px;
   background: rgba(9, 8, 13, 0.45);
   border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.change-row > div {
+  min-width: 0;
+}
+
+.change-row__action {
+  flex-shrink: 0;
 }
 
 .change-kind {
@@ -704,6 +737,17 @@ textarea {
 
   .change-columns {
     grid-template-columns: 1fr;
+  }
+
+  .change-column__header,
+  .change-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .change-column__action,
+  .change-row__action {
+    width: 100%;
   }
 
   .history-row {
