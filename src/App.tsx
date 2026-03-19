@@ -95,7 +95,14 @@ type WorkspaceTab = {
   commitDetailCache: Record<string, CommitDetail>;
 };
 
+type PersistedSession = {
+  repositories: string[];
+  activeRepositoryIndex: number;
+};
+
 const WORKING_TREE_HISTORY_ENTRY_ID = "working-tree";
+const PERSISTED_SESSION_KEY = "gitgud.open-repositories";
+const AUTO_REFRESH_INTERVAL_MS = 15_000;
 
 const CHANGE_LABELS: Record<ChangeKind, string> = {
   added: "Nuevo",
@@ -128,6 +135,31 @@ function createEmptyTab(id: number): WorkspaceTab {
   };
 }
 
+function parsePersistedSession(rawValue: string | null): PersistedSession | null {
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsedValue = JSON.parse(rawValue) as Partial<PersistedSession>;
+    const repositories = Array.isArray(parsedValue.repositories)
+      ? parsedValue.repositories.filter((value): value is string => typeof value === "string")
+      : [];
+    const activeRepositoryIndex =
+      typeof parsedValue.activeRepositoryIndex === "number" &&
+      Number.isInteger(parsedValue.activeRepositoryIndex)
+        ? parsedValue.activeRepositoryIndex
+        : 0;
+
+    return {
+      repositories,
+      activeRepositoryIndex,
+    };
+  } catch {
+    return null;
+  }
+}
+
 const DATE_TIME_FORMATTER = new Intl.DateTimeFormat("es-CL", {
   month: "2-digit",
   day: "2-digit",
@@ -149,7 +181,6 @@ function App() {
   const [activeTabId, setActiveTabId] = useState(1);
   const [nextTabId, setNextTabId] = useState(2);
   const [isOpening, setIsOpening] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeStatusAction, setActiveStatusAction] = useState<string | null>(null);
   const [isCommitting, setIsCommitting] = useState(false);
   const [activeRemoteOperation, setActiveRemoteOperation] = useState<
@@ -157,6 +188,8 @@ function App() {
   >(null);
   const [isLoadingCommitDetail, setIsLoadingCommitDetail] = useState(false);
   const latestCommitDetailRequestRef = useRef(0);
+  const hasRestoredSessionRef = useRef(false);
+  const refreshInFlightRef = useRef<Set<number>>(new Set());
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const repository = activeTab?.repository ?? null;
@@ -212,6 +245,35 @@ function App() {
     }));
   }
 
+  const refreshTabRepository = useCallback(
+    async (tabId: number, options?: { silent?: boolean }) => {
+      const targetTab = tabs.find((tab) => tab.id === tabId);
+      const targetRepository = targetTab?.repository;
+
+      if (!targetTab || !targetRepository || refreshInFlightRef.current.has(tabId)) {
+        return;
+      }
+
+      refreshInFlightRef.current.add(tabId);
+
+      try {
+        await loadRepository(tabId, targetRepository.path, "refresh_repository");
+      } catch (error) {
+        if (!options?.silent) {
+          showErrorFeedback(
+            tabId,
+            "No se pudo refrescar",
+            error,
+            "No fue posible refrescar el estado del repositorio.",
+          );
+        }
+      } finally {
+        refreshInFlightRef.current.delete(tabId);
+      }
+    },
+    [tabs],
+  );
+
   function handleCreateTab() {
     const newId = nextTabId;
     setTabs((currentTabs) => [...currentTabs, createEmptyTab(newId)]);
@@ -245,27 +307,6 @@ function App() {
       );
     } finally {
       setIsOpening(false);
-    }
-  }
-
-  async function handleRefreshRepository() {
-    if (!repository || !activeTab) {
-      return;
-    }
-
-    setIsRefreshing(true);
-
-    try {
-      await loadRepository(activeTab.id, repository.path, "refresh_repository");
-    } catch (error) {
-      showErrorFeedback(
-        activeTab.id,
-        "No se pudo refrescar",
-        error,
-        "No fue posible refrescar el estado del repositorio.",
-      );
-    } finally {
-      setIsRefreshing(false);
     }
   }
 
@@ -479,6 +520,171 @@ function App() {
   }, [activeTab?.id]);
 
   useEffect(() => {
+    let isCancelled = false;
+
+    async function restorePersistedRepositories() {
+      const persistedSession = parsePersistedSession(localStorage.getItem(PERSISTED_SESSION_KEY));
+
+      if (!persistedSession || persistedSession.repositories.length === 0) {
+        hasRestoredSessionRef.current = true;
+        return;
+      }
+
+      const restoredRepositories = await Promise.allSettled(
+        persistedSession.repositories.map((path) => invoke<RepositoryState>("open_repository", { path })),
+      );
+
+      if (isCancelled) {
+        return;
+      }
+
+      const restoredTabs = restoredRepositories.flatMap((result, index) => {
+        if (result.status !== "fulfilled") {
+          return [];
+        }
+
+        return [
+          {
+            ...createEmptyTab(index + 1),
+            title: result.value.name,
+            repository: result.value,
+          },
+        ];
+      });
+
+      const failedRepositoryCount = restoredRepositories.length - restoredTabs.length;
+
+      if (restoredTabs.length === 0) {
+        const fallbackTab = createEmptyTab(1);
+
+        if (failedRepositoryCount > 0) {
+          fallbackTab.feedback = {
+            title: "Repositorios no restaurados",
+            message:
+              failedRepositoryCount === 1
+                ? "No fue posible reabrir el repositorio guardado de la sesion anterior."
+                : `No fue posible reabrir ${failedRepositoryCount} repositorios guardados de la sesion anterior.`,
+            tone: "warning",
+          };
+        }
+
+        setTabs([fallbackTab]);
+        setActiveTabId(1);
+        setNextTabId(2);
+        hasRestoredSessionRef.current = true;
+        return;
+      }
+
+      const boundedActiveRepositoryIndex = Math.min(
+        Math.max(persistedSession.activeRepositoryIndex, 0),
+        restoredTabs.length - 1,
+      );
+      const activeRepositoryId = restoredTabs[boundedActiveRepositoryIndex]?.id ?? restoredTabs[0].id;
+      const nextTabs = [...restoredTabs];
+
+      if (failedRepositoryCount > 0) {
+        nextTabs[0] = {
+          ...nextTabs[0],
+          feedback: {
+            title: "Restauracion parcial",
+            message:
+              failedRepositoryCount === 1
+                ? "Un repositorio guardado no pudo reabrirse automaticamente."
+                : `${failedRepositoryCount} repositorios guardados no pudieron reabrirse automaticamente.`,
+            tone: "warning",
+          },
+        };
+      }
+
+      setTabs(nextTabs);
+      setActiveTabId(activeRepositoryId);
+      setNextTabId(nextTabs.length + 1);
+      hasRestoredSessionRef.current = true;
+    }
+
+    void restorePersistedRepositories();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hasRestoredSessionRef.current) {
+      return;
+    }
+
+    const repositories = tabs.flatMap((tab) => (tab.repository ? [tab.repository.path] : []));
+    const activeRepositoryIndex = tabs.reduce((matchIndex, tab, index) => {
+      if (!tab.repository) {
+        return matchIndex;
+      }
+
+      const repositoryIndex = tabs
+        .slice(0, index + 1)
+        .filter((candidateTab) => candidateTab.repository)
+        .length - 1;
+
+      return tab.id === activeTabId ? repositoryIndex : matchIndex;
+    }, 0);
+
+    const persistedSession: PersistedSession = {
+      repositories,
+      activeRepositoryIndex,
+    };
+
+    localStorage.setItem(PERSISTED_SESSION_KEY, JSON.stringify(persistedSession));
+  }, [activeTabId, tabs]);
+
+  useEffect(() => {
+    if (!hasRestoredSessionRef.current || !activeTab?.repository) {
+      return;
+    }
+
+    void refreshTabRepository(activeTab.id, { silent: true });
+  }, [activeTab?.id, activeTab?.repository?.path, refreshTabRepository]);
+
+  useEffect(() => {
+    if (!hasRestoredSessionRef.current) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      tabs.forEach((tab) => {
+        if (!tab.repository) {
+          return;
+        }
+
+        void refreshTabRepository(tab.id, { silent: true });
+      });
+    }, AUTO_REFRESH_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [refreshTabRepository, tabs]);
+
+  useEffect(() => {
+    if (!hasRestoredSessionRef.current) {
+      return;
+    }
+
+    function handleWindowFocus() {
+      if (!activeTab?.repository) {
+        return;
+      }
+
+      void refreshTabRepository(activeTab.id, { silent: true });
+    }
+
+    window.addEventListener("focus", handleWindowFocus);
+
+    return () => {
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, [activeTab?.id, activeTab?.repository?.path, refreshTabRepository]);
+
+  useEffect(() => {
     if (!activeTab) {
       return;
     }
@@ -605,9 +811,6 @@ function App() {
                 <div className="h-6 w-px bg-outline-variant/20 mx-2"></div>
                 <button className="flex items-center gap-1.5 px-3 py-1 text-xs font-label font-medium bg-surface-container-highest/50 border border-outline-variant/20 rounded-full text-on-surface-variant hover:border-primary/40">
                   <span className="material-symbols-outlined text-sm">mediation</span>{repository.currentBranch ?? "-"}
-                </button>
-                <button className="flex items-center gap-1.5 px-3 py-1 text-xs font-label font-medium text-on-surface-variant hover:text-on-surface" onClick={handleRefreshRepository}>
-                  <span className="material-symbols-outlined text-sm">sync</span>{isRefreshing ? "Syncing..." : "Sync"}
                 </button>
              </>
           ) : null}
