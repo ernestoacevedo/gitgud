@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import "./App.css";
@@ -43,6 +43,28 @@ type CommitSummary = {
   isHead: boolean;
 };
 
+type CommitDetail = {
+  fullSha: string;
+  shortSha: string;
+  summary: string;
+  message: string;
+  authorName: string;
+  authorEmail: string | null;
+  authoredAt: number;
+  committerName: string;
+  committerEmail: string | null;
+  committedAt: number;
+  parentShas: string[];
+  fileChanges: CommitFileChange[];
+  fileListNotice: string | null;
+};
+
+type CommitFileChange = {
+  path: string;
+  previousPath: string | null;
+  kind: ChangeKind;
+};
+
 const CHANGE_LABELS: Record<ChangeKind, string> = {
   added: "Nuevo",
   modified: "Modificado",
@@ -59,6 +81,10 @@ function App() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const [isCommitting, setIsCommitting] = useState(false);
+  const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
+  const [selectedCommitDetail, setSelectedCommitDetail] = useState<CommitDetail | null>(null);
+  const [isLoadingCommitDetail, setIsLoadingCommitDetail] = useState(false);
+  const [commitDetailError, setCommitDetailError] = useState<string | null>(null);
 
   async function loadRepository(path: string, command: "open_repository" | "refresh_repository") {
     const nextRepository = await invoke<RepositoryState>(command, { path });
@@ -140,6 +166,55 @@ function App() {
       setIsCommitting(false);
     }
   }
+
+  async function loadCommitDetail(path: string, commitSha: string) {
+    setIsLoadingCommitDetail(true);
+
+    try {
+      const detail = await invoke<CommitDetail>("read_commit_detail", {
+        path,
+        commitSha,
+      });
+      setSelectedCommitDetail(detail);
+      setCommitDetailError(null);
+    } catch (error) {
+      setSelectedCommitDetail(null);
+      setCommitDetailError(
+        error instanceof Error
+          ? error.message
+          : "No fue posible cargar el detalle del commit seleccionado.",
+      );
+    } finally {
+      setIsLoadingCommitDetail(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!repository || repository.recentCommits.length === 0) {
+      setSelectedCommitSha(null);
+      setSelectedCommitDetail(null);
+      setCommitDetailError(null);
+      return;
+    }
+
+    const nextSelectedCommit = repository.recentCommits.some(
+      (commit) => commit.shortSha === selectedCommitSha,
+    )
+      ? selectedCommitSha
+      : repository.recentCommits[0].shortSha;
+
+    if (nextSelectedCommit !== selectedCommitSha) {
+      setSelectedCommitSha(nextSelectedCommit);
+    }
+  }, [repository, selectedCommitSha]);
+
+  useEffect(() => {
+    if (!repository || !selectedCommitSha) {
+      return;
+    }
+
+    void loadCommitDetail(repository.path, selectedCommitSha);
+  }, [repository, selectedCommitSha]);
 
   const hasLocalChanges = Boolean(
     repository &&
@@ -359,7 +434,12 @@ function App() {
           ) : repository.recentCommits.length > 0 ? (
             <ul className="history-list">
               {repository.recentCommits.map((commit) => (
-                <HistoryRow key={commit.shortSha} commit={commit} />
+                <HistoryRow
+                  key={commit.shortSha}
+                  commit={commit}
+                  isSelected={commit.shortSha === selectedCommitSha}
+                  onSelect={() => setSelectedCommitSha(commit.shortSha)}
+                />
               ))}
             </ul>
           ) : (
@@ -367,6 +447,45 @@ function App() {
               <h2>Sin historial todavía</h2>
               <p>El repositorio aún no tiene commits visibles para mostrar.</p>
             </div>
+          )}
+        </article>
+      </section>
+
+      <section className="status-board">
+        <article className="info-card">
+          <div className="card-header">
+            <span className="section-kicker">Detalle del commit</span>
+            {repository && selectedCommitSha ? (
+              <span className="status-pill">
+                {isLoadingCommitDetail ? "Cargando" : selectedCommitSha}
+              </span>
+            ) : null}
+          </div>
+
+          {!repository ? (
+            <p className="placeholder-copy">
+              Abre un repositorio para inspeccionar el detalle de un commit.
+            </p>
+          ) : repository.recentCommits.length === 0 ? (
+            <div className="empty-state empty-state--compact">
+              <h2>Sin commit seleccionado</h2>
+              <p>Necesitas historial visible para consultar archivos y metadata.</p>
+            </div>
+          ) : isLoadingCommitDetail && !selectedCommitDetail ? (
+            <p className="placeholder-copy">
+              Cargando metadata y archivos del commit seleccionado...
+            </p>
+          ) : commitDetailError ? (
+            <div className="feedback-card feedback-card--error" role="alert">
+              <span className="feedback-label">Detalle no disponible</span>
+              <p>{commitDetailError}</p>
+            </div>
+          ) : selectedCommitDetail ? (
+            <CommitDetailPanel detail={selectedCommitDetail} />
+          ) : (
+            <p className="placeholder-copy">
+              Selecciona un commit del historial para ver su metadata y archivos.
+            </p>
           )}
         </article>
       </section>
@@ -416,27 +535,123 @@ function StatusColumn({
 
 type HistoryRowProps = {
   commit: CommitSummary;
+  isSelected: boolean;
+  onSelect: () => void;
 };
 
-function HistoryRow({ commit }: HistoryRowProps) {
+function HistoryRow({ commit, isSelected, onSelect }: HistoryRowProps) {
   const formattedDate = new Intl.DateTimeFormat("es-CL", {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(commit.authoredAt * 1000));
 
   return (
-    <li className={`history-row${commit.isHead ? " history-row--head" : ""}`}>
-      <CommitGraph commit={commit} />
-      <div className="history-row__content">
-        <div className="history-row__meta">
-          <span className="commit-sha">{commit.shortSha}</span>
-          {commit.isHead ? <span className="head-badge">HEAD</span> : null}
-          <span className="history-author">{commit.authorName}</span>
-          <span className="history-date">{formattedDate}</span>
+    <li>
+      <button
+        className={`history-row${commit.isHead ? " history-row--head" : ""}${isSelected ? " history-row--selected" : ""}`}
+        type="button"
+        onClick={onSelect}
+      >
+        <CommitGraph commit={commit} />
+        <div className="history-row__content">
+          <div className="history-row__meta">
+            <span className="commit-sha">{commit.shortSha}</span>
+            {commit.isHead ? <span className="head-badge">HEAD</span> : null}
+            <span className="history-author">{commit.authorName}</span>
+            <span className="history-date">{formattedDate}</span>
+          </div>
+          <p className="history-summary">{commit.summary}</p>
         </div>
-        <p className="history-summary">{commit.summary}</p>
-      </div>
+      </button>
     </li>
+  );
+}
+
+type CommitDetailPanelProps = {
+  detail: CommitDetail;
+};
+
+function CommitDetailPanel({ detail }: CommitDetailPanelProps) {
+  const authoredAt = new Intl.DateTimeFormat("es-CL", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(detail.authoredAt * 1000));
+  const committedAt = new Intl.DateTimeFormat("es-CL", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(detail.committedAt * 1000));
+
+  return (
+    <div className="commit-detail">
+      <div className="commit-detail__header">
+        <h2>{detail.summary}</h2>
+        <p>{detail.message}</p>
+      </div>
+
+      <dl className="detail-list commit-detail__meta">
+        <div>
+          <dt>SHA completo</dt>
+          <dd>{detail.fullSha}</dd>
+        </div>
+        <div>
+          <dt>Autor</dt>
+          <dd>
+            {detail.authorName}
+            {detail.authorEmail ? ` <${detail.authorEmail}>` : ""}
+          </dd>
+        </div>
+        <div>
+          <dt>Fecha autor</dt>
+          <dd>{authoredAt}</dd>
+        </div>
+        <div>
+          <dt>Committer</dt>
+          <dd>
+            {detail.committerName}
+            {detail.committerEmail ? ` <${detail.committerEmail}>` : ""}
+          </dd>
+        </div>
+        <div>
+          <dt>Fecha commit</dt>
+          <dd>{committedAt}</dd>
+        </div>
+        <div>
+          <dt>Padres</dt>
+          <dd>{detail.parentShas.length > 0 ? detail.parentShas.join(", ") : "Sin padres"}</dd>
+        </div>
+      </dl>
+
+      <section className="commit-files">
+        <div className="change-column__header">
+          <h2>Archivos modificados</h2>
+          <p>Lista de archivos detectados en el diff del commit seleccionado.</p>
+        </div>
+
+        {detail.fileChanges.length > 0 ? (
+          <ul className="change-list">
+            {detail.fileChanges.map((change) => (
+              <li key={`${detail.fullSha}-${change.path}`} className="change-row">
+                <span className={`change-kind change-kind--${change.kind}`}>
+                  {CHANGE_LABELS[change.kind]}
+                </span>
+                <p className="change-path">
+                  {change.previousPath ? `${change.previousPath} -> ${change.path}` : change.path}
+                </p>
+              </li>
+            ))}
+          </ul>
+        ) : detail.fileListNotice ? (
+          <div className="feedback-card feedback-card--warning" role="status">
+            <span className="feedback-label">Archivos no visibles</span>
+            <p>{detail.fileListNotice}</p>
+          </div>
+        ) : (
+          <p className="placeholder-copy">
+            No se reportaron archivos para este commit.
+          </p>
+        )}
+      </section>
+    </div>
   );
 }
 

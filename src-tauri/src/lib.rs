@@ -1,4 +1,4 @@
-use git2::{Commit, Repository, Signature, Status, StatusOptions};
+use git2::{Commit, Delta, DiffOptions, Repository, Signature, Status, StatusOptions};
 use serde::Serialize;
 use std::path::Path;
 
@@ -53,6 +53,32 @@ struct CommitSummary {
     is_head: bool,
 }
 
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CommitDetail {
+    full_sha: String,
+    short_sha: String,
+    summary: String,
+    message: String,
+    author_name: String,
+    author_email: Option<String>,
+    authored_at: i64,
+    committer_name: String,
+    committer_email: Option<String>,
+    committed_at: i64,
+    parent_shas: Vec<String>,
+    file_changes: Vec<CommitFileChange>,
+    file_list_notice: Option<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CommitFileChange {
+    path: String,
+    previous_path: Option<String>,
+    kind: ChangeKind,
+}
+
 fn short_head_sha(repository: &Repository) -> Option<String> {
     repository
         .head()
@@ -92,8 +118,24 @@ fn display_author_name(commit: &Commit) -> String {
         .unwrap_or_else(|| "Autor desconocido".to_string())
 }
 
+fn display_signature_name(signature: &git2::Signature<'_>, fallback: &str) -> String {
+    signature.name().map(str::to_owned).unwrap_or_else(|| fallback.to_string())
+}
+
 fn short_oid(oid: git2::Oid) -> String {
     oid.to_string().chars().take(7).collect()
+}
+
+fn map_delta_change(status: Delta) -> Option<ChangeKind> {
+    match status {
+        Delta::Added => Some(ChangeKind::Added),
+        Delta::Modified => Some(ChangeKind::Modified),
+        Delta::Deleted => Some(ChangeKind::Deleted),
+        Delta::Renamed => Some(ChangeKind::Renamed),
+        Delta::Typechange => Some(ChangeKind::Typechange),
+        Delta::Conflicted => Some(ChangeKind::Conflicted),
+        _ => None,
+    }
 }
 
 fn map_index_change(status: Status) -> Option<ChangeKind> {
@@ -276,6 +318,87 @@ fn recent_commits(repository: &Repository) -> Result<Vec<CommitSummary>, String>
     Ok(commits)
 }
 
+fn commit_detail(repository: &Repository, revision: &str) -> Result<CommitDetail, String> {
+    let object = repository
+        .revparse_single(revision)
+        .map_err(|error| format!("No fue posible resolver el commit seleccionado: {error}"))?;
+    let commit = object
+        .peel_to_commit()
+        .map_err(|error| format!("No fue posible cargar el commit seleccionado: {error}"))?;
+    let tree = commit
+        .tree()
+        .map_err(|error| format!("No fue posible leer el arbol del commit seleccionado: {error}"))?;
+    let parent_tree = match commit.parent_count() {
+        0 => None,
+        _ => Some(
+            commit
+                .parent(0)
+                .and_then(|parent| parent.tree())
+                .map_err(|error| format!("No fue posible leer el padre del commit seleccionado: {error}"))?,
+        ),
+    };
+    let mut diff_options = DiffOptions::new();
+    diff_options.include_typechange(true);
+    let diff = repository
+        .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut diff_options))
+        .map_err(|error| format!("No fue posible leer los archivos cambiados del commit: {error}"))?;
+
+    let mut file_changes = Vec::new();
+    for delta in diff.deltas() {
+        let Some(kind) = map_delta_change(delta.status()) else {
+            continue;
+        };
+
+        let old_path = delta.old_file().path().map(|path| path.display().to_string());
+        let new_path = delta.new_file().path().map(|path| path.display().to_string());
+        let path = match (&new_path, &old_path) {
+            (Some(path), _) if !path.is_empty() => path.clone(),
+            (_, Some(path)) if !path.is_empty() => path.clone(),
+            _ => continue,
+        };
+        let previous_path = match kind {
+            ChangeKind::Renamed if old_path.as_deref() != Some(path.as_str()) => old_path,
+            _ => None,
+        };
+
+        file_changes.push(CommitFileChange {
+            path,
+            previous_path,
+            kind,
+        });
+    }
+
+    file_changes.sort_by(|left, right| left.path.cmp(&right.path));
+
+    let file_list_notice = if file_changes.is_empty() {
+        Some(
+            "Git no expuso archivos visibles para este commit. Puede tratarse de un commit vacio o de una limitacion del diff disponible."
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
+    let author = commit.author();
+    let committer = commit.committer();
+
+    Ok(CommitDetail {
+        full_sha: commit.id().to_string(),
+        short_sha: short_oid(commit.id()),
+        summary: display_commit_summary(&commit),
+        message: commit.message().unwrap_or("Commit sin mensaje").to_string(),
+        author_name: display_signature_name(&author, "Autor desconocido"),
+        author_email: author.email().map(str::to_owned),
+        authored_at: author.when().seconds(),
+        committer_name: display_signature_name(&committer, "Committer desconocido"),
+        committer_email: committer.email().map(str::to_owned),
+        committed_at: committer.when().seconds(),
+        parent_shas: commit.parent_ids().map(short_oid).collect(),
+        file_changes,
+        file_list_notice,
+    })
+}
+
 fn commit_signature(repository: &Repository) -> Result<Signature<'_>, String> {
     repository
         .signature()
@@ -365,6 +488,13 @@ fn create_commit(path: String, message: String) -> Result<RepositoryState, Strin
     repository_state_from_path(Path::new(&path))
 }
 
+#[tauri::command]
+fn read_commit_detail(path: String, commit_sha: String) -> Result<CommitDetail, String> {
+    let repository = Repository::open(Path::new(&path))
+        .map_err(|error| format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}"))?;
+    commit_detail(&repository, &commit_sha)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -373,7 +503,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_repository,
             refresh_repository,
-            create_commit
+            create_commit,
+            read_commit_detail
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -381,7 +512,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{create_commit_for_repository, repository_state_from_path, ChangeKind, ChangedFile};
+    use super::{
+        commit_detail, create_commit_for_repository, repository_state_from_path, ChangeKind, ChangedFile,
+    };
     use git2::{BranchType, IndexAddOption, Repository, Signature};
     use std::fs;
     use std::path::Path;
@@ -701,6 +834,67 @@ mod tests {
         let error = create_commit_for_repository(&repository, "Empty commit").expect_err("expected error");
 
         assert!(error.contains("No hay cambios staged"));
+    }
+
+    #[test]
+    fn reads_commit_detail_with_changed_files_and_metadata() {
+        let directory = tempdir().expect("tempdir");
+        let repository = Repository::init(directory.path()).expect("repo init");
+        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+
+        fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
+        commit_all(&repository, &signature, "base commit");
+
+        fs::write(directory.path().join("tracked.txt"), "base\nupdated\n").expect("update tracked");
+        fs::write(directory.path().join("added.txt"), "new\n").expect("write added");
+        let mut index = repository.index().expect("index");
+        index
+            .add_path(Path::new("tracked.txt"))
+            .expect("stage tracked");
+        index.add_path(Path::new("added.txt")).expect("stage added");
+        index.write().expect("write index");
+
+        let commit_id = commit_all(&repository, &signature, "detail commit");
+        let detail = commit_detail(&repository, &short_sha(commit_id)).expect("detail");
+
+        assert_eq!(detail.short_sha, short_sha(commit_id));
+        assert_eq!(detail.summary, "detail commit");
+        assert_eq!(detail.author_name, "GitGud");
+        assert_eq!(detail.author_email.as_deref(), Some("gitgud@example.com"));
+        assert_eq!(detail.parent_shas.len(), 1);
+        assert!(
+            detail.file_changes.contains(&super::CommitFileChange {
+                path: "added.txt".to_string(),
+                previous_path: None,
+                kind: ChangeKind::Added,
+            })
+        );
+        assert!(
+            detail.file_changes.contains(&super::CommitFileChange {
+                path: "tracked.txt".to_string(),
+                previous_path: None,
+                kind: ChangeKind::Modified,
+            })
+        );
+        assert!(detail.file_list_notice.is_none());
+    }
+
+    #[test]
+    fn reports_clear_notice_when_commit_has_no_visible_files() {
+        let directory = tempdir().expect("tempdir");
+        let repository = Repository::init(directory.path()).expect("repo init");
+        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+
+        let tree_id = repository.index().expect("index").write_tree().expect("write tree");
+        let tree = repository.find_tree(tree_id).expect("tree");
+        let commit_id = repository
+            .commit(Some("HEAD"), &signature, &signature, "empty", &tree, &[])
+            .expect("empty commit");
+
+        let detail = commit_detail(&repository, &short_sha(commit_id)).expect("detail");
+
+        assert!(detail.file_changes.is_empty());
+        assert!(detail.file_list_notice.is_some());
     }
 
     fn short_sha(oid: git2::Oid) -> String {
