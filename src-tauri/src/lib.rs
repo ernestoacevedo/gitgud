@@ -1065,7 +1065,7 @@ mod tests {
     }
 
     fn configure_identity(repository_path: &Path) {
-        run_git(&["config", "user.name", "GitGud Tester"], repository_path);
+        run_git(&["config", "user.name", "gitgud Tester"], repository_path);
         run_git(
             &["config", "user.email", "tester@example.com"],
             repository_path,
@@ -1076,9 +1076,9 @@ mod tests {
     fn loads_repository_state_for_valid_repo() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let signature = Signature::now("gitgud", "gitgud@example.com").expect("signature");
 
-        fs::write(directory.path().join("README.md"), "# GitGud\n").expect("write readme");
+        fs::write(directory.path().join("README.md"), "# gitgud\n").expect("write readme");
         commit_all(&repository, &signature, "Initial commit");
         repository
             .index()
@@ -1129,7 +1129,7 @@ mod tests {
     fn resolves_branch_names_through_local_branch_lookup() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let signature = Signature::now("gitgud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("tracked.txt"), "content").expect("write file");
         let commit_id = commit_all(&repository, &signature, "init");
@@ -1172,7 +1172,7 @@ mod tests {
     fn creates_and_checks_out_a_new_local_branch() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let signature = Signature::now("gitgud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
         commit_all(&repository, &signature, "init");
@@ -1192,7 +1192,7 @@ mod tests {
     fn checks_out_existing_local_branch() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let signature = Signature::now("gitgud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
         let commit_id = commit_all(&repository, &signature, "init");
@@ -1213,7 +1213,7 @@ mod tests {
     fn reports_checkout_errors_without_hiding_repository_state() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let signature = Signature::now("gitgud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
         let commit_id = commit_all(&repository, &signature, "init");
@@ -1246,7 +1246,7 @@ mod tests {
     fn reports_staged_and_unstaged_changes_separately() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let signature = Signature::now("gitgud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
         commit_all(&repository, &signature, "init");
@@ -1287,7 +1287,7 @@ mod tests {
     fn stages_and_unstages_individual_files() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let signature = Signature::now("gitgud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
         commit_all(&repository, &signature, "init");
@@ -1320,7 +1320,7 @@ mod tests {
     fn stages_and_unstages_all_visible_changes() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let signature = Signature::now("gitgud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
         commit_all(&repository, &signature, "init");
@@ -1356,7 +1356,7 @@ mod tests {
     fn reports_renamed_and_deleted_files() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let signature = Signature::now("gitgud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("rename-me.txt"), "rename\n").expect("write rename");
         fs::write(directory.path().join("delete-me.txt"), "delete\n").expect("write delete");
@@ -1410,7 +1410,7 @@ mod tests {
     fn creates_commit_from_staged_changes_and_updates_history() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let signature = Signature::now("gitgud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
         commit_all(&repository, &signature, "init");
@@ -1418,7 +1418,7 @@ mod tests {
         repository
             .config()
             .expect("config")
-            .set_str("user.name", "GitGud Tester")
+            .set_str("user.name", "gitgud Tester")
             .expect("set user.name");
         repository
             .config()
@@ -1460,7 +1460,7 @@ mod tests {
     fn includes_graph_metadata_for_merge_commits() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let signature = Signature::now("gitgud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("shared.txt"), "base\n").expect("write base");
         let base_commit_id = commit_all(&repository, &signature, "base");
@@ -1534,7 +1534,7 @@ mod tests {
         repository
             .config()
             .expect("config")
-            .set_str("user.name", "GitGud Tester")
+            .set_str("user.name", "gitgud Tester")
             .expect("set user.name");
         repository
             .config()
@@ -1552,7 +1552,7 @@ mod tests {
     fn reads_commit_detail_with_changed_files_and_metadata() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let signature = Signature::now("gitgud", "gitgud@example.com").expect("signature");
 
         fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
         commit_all(&repository, &signature, "base commit");
@@ -1571,7 +1571,7 @@ mod tests {
 
         assert_eq!(detail.short_sha, short_sha(commit_id));
         assert_eq!(detail.summary, "detail commit");
-        assert_eq!(detail.author_name, "GitGud");
+        assert_eq!(detail.author_name, "gitgud");
         assert_eq!(detail.author_email.as_deref(), Some("gitgud@example.com"));
         assert_eq!(detail.parent_shas.len(), 1);
         assert!(detail.file_changes.contains(&super::CommitFileChange {
@@ -1591,7 +1591,7 @@ mod tests {
     fn reports_clear_notice_when_commit_has_no_visible_files() {
         let directory = tempdir().expect("tempdir");
         let repository = Repository::init(directory.path()).expect("repo init");
-        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+        let signature = Signature::now("gitgud", "gitgud@example.com").expect("signature");
 
         let tree_id = repository
             .index()

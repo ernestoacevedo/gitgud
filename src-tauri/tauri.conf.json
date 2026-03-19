@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "GitGud",
+  "productName": "gitgud",
   "version": "0.1.0",
   "identifier": "com.gitgud.app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "GitGud",
+        "title": "gitgud",
         "hiddenTitle": true,
         "titleBarStyle": "Overlay",
         "width": 1120,

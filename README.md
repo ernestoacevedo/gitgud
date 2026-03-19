@@ -1,10 +1,10 @@
-# GitGud
+# gitgud
 
-GitGud is a desktop Git client built with Tauri, React, and Rust for everyday local repository workflows.
+gitgud is a desktop Git client built with Tauri, React, and Rust for everyday local repository workflows.
 
 ## Current Scope
 
-GitGud currently supports:
+gitgud currently supports:
 
 - Opening an existing local Git repository from the native folder picker.
 - Working with multiple repository tabs in the same session.
@@ -20,7 +20,7 @@ GitGud currently supports:
 
 ## Known Limitations
 
-- GitGud only works with existing local repositories. It does not initialize or clone repositories.
+- gitgud only works with existing local repositories. It does not initialize or clone repositories.
 - Remote synchronization uses the system `git` binary with `GIT_TERMINAL_PROMPT=0`, so interactive authentication flows are not handled inside the app.
 - `pull` and `push` require a local branch with an upstream already configured.
 - The visible history is intentionally limited to recent commits to keep the UI responsive.
