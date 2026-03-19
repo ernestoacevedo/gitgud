@@ -1,75 +1,77 @@
 # GitGud
 
-Cliente Git de escritorio construido con Tauri, React y Rust para cubrir el flujo diario basico sin depender de la terminal.
+GitGud is a desktop Git client built with Tauri, React, and Rust for everyday local repository workflows.
 
-## Alcance de la primera version
+## Current Scope
 
-GitGud permite:
+GitGud currently supports:
 
-- Abrir un repositorio Git local desde el dialogo nativo.
-- Ver el estado actual separado en cambios `staged` y `unstaged`.
-- Hacer `stage` y `unstage` por archivo o en bloque.
-- Crear commits desde la UI.
-- Ver historial reciente en forma de grafo.
-- Inspeccionar el detalle de un commit.
-- Crear ramas locales y hacer `checkout`.
-- Ejecutar `fetch`, `pull` y `push`.
+- Opening an existing local Git repository from the native folder picker.
+- Working with multiple repository tabs in the same session.
+- Restoring previously opened repositories when the app is reopened.
+- Refreshing repository state automatically on focus and on a timed interval.
+- Viewing repository status split into `staged` and `unstaged` changes.
+- Staging and unstaging files individually or in bulk.
+- Creating commits from the UI.
+- Viewing recent history as a lightweight commit graph.
+- Inspecting commit metadata and changed files.
+- Running `fetch`, `pull`, and `push`.
+- Viewing the current branch and upstream ahead/behind status.
 
-## Limitaciones conocidas
+## Known Limitations
 
-- Solo trabaja con repositorios locales ya existentes; no crea ni clona repositorios.
-- La sincronizacion remota usa el binario `git` del sistema con `GIT_TERMINAL_PROMPT=0`, por lo que no resuelve flujos interactivos de autenticacion dentro de la app.
-- `pull` y `push` requieren una rama local con upstream configurado.
-- El historial visible se limita a commits recientes para mantener la UI liviana.
-- El detalle de commit depende del diff que Git pueda exponer; commits vacios u otros casos especiales pueden mostrar una advertencia sin archivos.
-- No hay resolucion de conflictos ni manejo de stash en esta version.
+- GitGud only works with existing local repositories. It does not initialize or clone repositories.
+- Remote synchronization uses the system `git` binary with `GIT_TERMINAL_PROMPT=0`, so interactive authentication flows are not handled inside the app.
+- `pull` and `push` require a local branch with an upstream already configured.
+- The visible history is intentionally limited to recent commits to keep the UI responsive.
+- Commit detail depends on what Git can expose through the available diff. Empty commits or edge cases may show a notice instead of a file list.
+- Conflict resolution, stash management, and repository creation are not included in the current version.
+- Branch creation and checkout are implemented in the backend and covered by tests, but the current frontend does not yet expose a dedicated branch management flow.
 
-## Errores esperables en la UI
+## Expected UI Errors
 
-Los errores del flujo basico se muestran con el mismo patron visual de feedback en la parte superior de la interfaz o en la tarjeta afectada:
+Most workflow errors are surfaced through inline feedback in the main view or the affected panel, including:
 
-- Apertura de carpeta no Git.
-- Fallo al refrescar estado.
-- Error de `stage` o `unstage`.
-- Commit rechazado por falta de identidad, mensaje vacio o ausencia de cambios staged.
-- Checkout bloqueado por cambios locales.
-- Creacion de rama con nombre invalido o duplicado.
-- `fetch`, `pull` o `push` sin remoto, sin upstream o con error de autenticacion/sincronizacion.
+- Opening a folder that is not a valid Git repository.
+- Failing to refresh repository state.
+- Stage or unstage failures.
+- Commit rejection due to missing Git identity, an empty message, or no staged changes.
+- Remote operations failing because of missing remotes, missing upstream configuration, authentication issues, or sync errors.
 
-## Validacion manual sugerida
+## Suggested Manual Validation
 
-Usa un repositorio de prueba con al menos un remoto local o accesible.
+Use a test repository with at least one reachable remote.
 
-1. Abrir repositorio: selecciona una carpeta Git valida y confirma que nombre, ruta, rama y estado se cargan; luego intenta abrir una carpeta sin `.git` y verifica el mensaje de error.
-2. Stage por archivo: modifica un archivo tracked, usa `Agregar al stage` y confirma que pasa de la columna `Unstaged` a `Staged`.
-3. Unstage por archivo: usa `Sacar del stage` y confirma que el archivo vuelve a `Unstaged`.
-4. Stage masivo: deja varios cambios visibles y usa `Stage de todo`; todos deben quedar en `Staged`.
-5. Unstage masivo: con varios cambios staged usa `Sacar todo del stage`; todos deben volver a `Unstaged`.
-6. Commit: con cambios staged crea un commit y verifica que el mensaje aparece al inicio del historial y que el estado local queda limpio.
-7. Historial: confirma que la lista muestra SHA corto, autor, fecha, grafo y marca visual de `HEAD`.
-8. Detalle de commit: selecciona un commit y valida metadata, padres y archivos modificados.
-9. Checkout: cambia a otra rama local y confirma que la rama activa se actualiza; luego repite con cambios locales conflictivos para verificar el error.
-10. Fetch: genera un commit remoto desde otro clon, ejecuta `Fetch` y valida el cambio en `ahead/behind`.
-11. Pull: con cambios remotos pendientes ejecuta `Pull` y confirma que el historial local se actualiza.
-12. Push: crea un commit local, ejecuta `Push` y valida que `ahead` vuelva a `0`.
+1. Open repository: select a valid Git folder and confirm the name, path, branch, status, and recent history load correctly. Then try a non-Git folder and verify the error message.
+2. Multi-tab workflow: open more than one repository, switch tabs, close and reopen the app, and confirm the repositories are restored.
+3. Individual stage: modify a tracked file, use the UI action to stage it, and confirm it moves from `Unstaged` to `Staged`.
+4. Individual unstage: unstage the same file and confirm it returns to `Unstaged`.
+5. Bulk stage: leave multiple visible changes and use `Stage all`; all files should move to `Staged`.
+6. Bulk unstage: with several staged changes, use `Unstage all`; all files should move back to `Unstaged`.
+7. Commit: create a commit from staged changes and confirm it appears at the top of history and the working tree becomes clean.
+8. Working tree detail: select the working tree entry and confirm staged and unstaged sections reflect the current repository state.
+9. Commit detail: select a commit and validate its metadata, parents, and changed files.
+10. Fetch: create a remote commit from another clone, run `Fetch`, and confirm the ahead/behind status updates.
+11. Pull: with remote changes available, run `Pull` and confirm local history updates.
+12. Push: create a local commit, run `Push`, and confirm the ahead count returns to `0`.
 
-## Desarrollo
+## Development
 
-Requisitos:
+Requirements:
 
 - Node.js
 - Rust
-- Dependencias de Tauri para tu sistema operativo
-- Git disponible en `PATH`
+- Tauri system dependencies for your operating system
+- Git available in `PATH`
 
-Comandos principales:
+Main commands:
 
 ```bash
 npm install
 npm run tauri dev
 ```
 
-Verificaciones usadas en esta iteracion:
+Verified in this repository:
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml
