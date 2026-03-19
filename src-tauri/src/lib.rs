@@ -1,4 +1,4 @@
-use git2::{Commit, Delta, DiffOptions, Repository, Signature, Status, StatusOptions};
+use git2::{BranchType, Commit, Delta, DiffOptions, Repository, Signature, Status, StatusOptions};
 use serde::Serialize;
 use std::path::Path;
 
@@ -34,6 +34,7 @@ struct RepositoryState {
     path: String,
     git_dir: String,
     current_branch: Option<String>,
+    local_branches: Vec<String>,
     head_short_sha: Option<String>,
     is_bare: bool,
     status: RepositoryStatus,
@@ -102,6 +103,18 @@ fn display_name(path: &Path) -> String {
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| path.display().to_string())
+}
+
+fn local_branch_names(repository: &Repository) -> Result<Vec<String>, String> {
+    let mut branches = repository
+        .branches(Some(BranchType::Local))
+        .map_err(|error| format!("No fue posible listar las ramas locales: {error}"))?
+        .filter_map(Result::ok)
+        .filter_map(|(branch, _)| branch.name().ok().flatten().map(str::to_owned))
+        .collect::<Vec<_>>();
+
+    branches.sort();
+    Ok(branches)
 }
 
 fn display_commit_summary(commit: &Commit) -> String {
@@ -450,6 +463,70 @@ fn create_commit_for_repository(repository: &Repository, message: &str) -> Resul
     Ok(())
 }
 
+fn ensure_valid_branch_name(name: &str) -> Result<String, String> {
+    let trimmed_name = name.trim();
+
+    if trimmed_name.is_empty() {
+        return Err("Debes ingresar un nombre para la nueva rama.".to_string());
+    }
+
+    let is_valid = git2::Branch::name_is_valid(trimmed_name)
+        .map_err(|error| format!("No fue posible validar el nombre de la rama: {error}"))?;
+    if !is_valid {
+        return Err("Debes ingresar un nombre de rama valido para Git.".to_string());
+    }
+
+    Ok(trimmed_name.to_string())
+}
+
+fn checkout_local_branch_for_repository(repository: &Repository, branch_name: &str) -> Result<(), String> {
+    let branch = repository
+        .find_branch(branch_name, BranchType::Local)
+        .map_err(|error| format!("No fue posible encontrar la rama local \"{branch_name}\": {error}"))?;
+    let reference = branch
+        .into_reference();
+    let reference_name = reference
+        .name()
+        .ok_or_else(|| format!("No fue posible resolver la referencia de la rama \"{branch_name}\"."))?
+        .to_string();
+    let object = reference
+        .peel(git2::ObjectType::Commit)
+        .map_err(|error| format!("No fue posible cargar la rama \"{branch_name}\": {error}"))?;
+
+    repository
+        .checkout_tree(&object, None)
+        .map_err(|error| format!("Git rechazo el checkout de \"{branch_name}\": {error}"))?;
+    repository
+        .set_head(&reference_name)
+        .map_err(|error| format!("No fue posible actualizar HEAD a \"{branch_name}\": {error}"))?;
+
+    Ok(())
+}
+
+fn create_branch_for_repository(repository: &Repository, branch_name: &str) -> Result<(), String> {
+    let valid_branch_name = ensure_valid_branch_name(branch_name)?;
+
+    if repository
+        .find_branch(&valid_branch_name, BranchType::Local)
+        .is_ok()
+    {
+        return Err(format!("La rama \"{valid_branch_name}\" ya existe."));
+    }
+
+    let head_commit = repository
+        .head()
+        .and_then(|head| head.peel_to_commit())
+        .map_err(|error| {
+            format!("No fue posible crear la rama \"{valid_branch_name}\": {error}")
+        })?;
+
+    repository
+        .branch(&valid_branch_name, &head_commit, false)
+        .map_err(|error| format!("Git rechazo la creacion de la rama \"{valid_branch_name}\": {error}"))?;
+
+    checkout_local_branch_for_repository(repository, &valid_branch_name)
+}
+
 fn repository_state_from_path(path: &Path) -> Result<RepositoryState, String> {
     let repository = Repository::open(path).map_err(|error| {
         format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
@@ -465,6 +542,7 @@ fn repository_state_from_path(path: &Path) -> Result<RepositoryState, String> {
         path: workdir.display().to_string(),
         git_dir: repository.path().display().to_string(),
         current_branch: current_branch_name(&repository),
+        local_branches: local_branch_names(&repository)?,
         head_short_sha: short_head_sha(&repository),
         is_bare: repository.is_bare(),
         status: repository_status(&repository)?,
@@ -491,6 +569,22 @@ fn create_commit(path: String, message: String) -> Result<RepositoryState, Strin
 }
 
 #[tauri::command]
+fn checkout_branch(path: String, branch_name: String) -> Result<RepositoryState, String> {
+    let repository = Repository::open(Path::new(&path))
+        .map_err(|error| format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}"))?;
+    checkout_local_branch_for_repository(&repository, &branch_name)?;
+    repository_state_from_path(Path::new(&path))
+}
+
+#[tauri::command]
+fn create_branch(path: String, branch_name: String) -> Result<RepositoryState, String> {
+    let repository = Repository::open(Path::new(&path))
+        .map_err(|error| format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}"))?;
+    create_branch_for_repository(&repository, &branch_name)?;
+    repository_state_from_path(Path::new(&path))
+}
+
+#[tauri::command]
 fn read_commit_detail(path: String, commit_sha: String) -> Result<CommitDetail, String> {
     let repository = Repository::open(Path::new(&path))
         .map_err(|error| format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}"))?;
@@ -506,6 +600,8 @@ pub fn run() {
             open_repository,
             refresh_repository,
             create_commit,
+            checkout_branch,
+            create_branch,
             read_commit_detail
         ])
         .run(tauri::generate_context!())
@@ -515,7 +611,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        commit_detail, create_commit_for_repository, repository_state_from_path, ChangeKind, ChangedFile,
+        checkout_local_branch_for_repository, commit_detail, create_branch_for_repository,
+        create_commit_for_repository, ensure_valid_branch_name, repository_state_from_path, ChangeKind,
+        ChangedFile,
     };
     use git2::{BranchType, IndexAddOption, Repository, Signature};
     use std::fs;
@@ -621,6 +719,85 @@ mod tests {
 
         assert!(branch_names.iter().any(|name| name == "feature/us-001"));
         assert_eq!(state.current_branch.as_deref(), Some("feature/us-001"));
+        assert!(state.local_branches.iter().any(|name| name == "feature/us-001"));
+    }
+
+    #[test]
+    fn validates_branch_names_before_creating_them() {
+        assert_eq!(
+            ensure_valid_branch_name(" feature/us-007 ").expect("valid branch"),
+            "feature/us-007"
+        );
+        assert!(ensure_valid_branch_name("").is_err());
+        assert!(ensure_valid_branch_name("with spaces").is_err());
+    }
+
+    #[test]
+    fn creates_and_checks_out_a_new_local_branch() {
+        let directory = tempdir().expect("tempdir");
+        let repository = Repository::init(directory.path()).expect("repo init");
+        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+
+        fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
+        commit_all(&repository, &signature, "init");
+
+        create_branch_for_repository(&repository, "feature/us-007").expect("create branch");
+
+        let state = repository_state_from_path(directory.path()).expect("state");
+
+        assert_eq!(state.current_branch.as_deref(), Some("feature/us-007"));
+        assert!(state.local_branches.iter().any(|name| name == "feature/us-007"));
+    }
+
+    #[test]
+    fn checks_out_existing_local_branch() {
+        let directory = tempdir().expect("tempdir");
+        let repository = Repository::init(directory.path()).expect("repo init");
+        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+
+        fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
+        let commit_id = commit_all(&repository, &signature, "init");
+        let commit = repository.find_commit(commit_id).expect("find commit");
+        repository
+            .branch("feature/existing", &commit, false)
+            .expect("create branch");
+
+        checkout_local_branch_for_repository(&repository, "feature/existing").expect("checkout branch");
+
+        let state = repository_state_from_path(directory.path()).expect("state");
+
+        assert_eq!(state.current_branch.as_deref(), Some("feature/existing"));
+    }
+
+    #[test]
+    fn reports_checkout_errors_without_hiding_repository_state() {
+        let directory = tempdir().expect("tempdir");
+        let repository = Repository::init(directory.path()).expect("repo init");
+        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+
+        fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
+        let commit_id = commit_all(&repository, &signature, "init");
+        let commit = repository.find_commit(commit_id).expect("find commit");
+        repository
+            .branch("feature/conflict", &commit, false)
+            .expect("create branch");
+        checkout_local_branch_for_repository(&repository, "feature/conflict").expect("checkout feature");
+        fs::write(directory.path().join("tracked.txt"), "branch change\n").expect("branch change");
+        commit_all(&repository, &signature, "branch commit");
+
+        fs::write(directory.path().join("tracked.txt"), "dirty worktree\n").expect("dirty worktree");
+
+        let error = checkout_local_branch_for_repository(&repository, "master")
+            .expect_err("expected checkout error");
+
+        assert!(error.contains("checkout"));
+        assert_eq!(
+            repository_state_from_path(directory.path())
+                .expect("state")
+                .current_branch
+                .as_deref(),
+            Some("feature/conflict")
+        );
     }
 
     #[test]

@@ -26,6 +26,7 @@ type RepositoryState = {
   path: string;
   gitDir: string;
   currentBranch: string | null;
+  localBranches: string[];
   headShortSha: string | null;
   isBare: boolean;
   status: RepositoryStatus;
@@ -80,6 +81,10 @@ function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isOpening, setIsOpening] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [selectedBranchName, setSelectedBranchName] = useState("");
+  const [newBranchName, setNewBranchName] = useState("");
+  const [isCheckingOutBranch, setIsCheckingOutBranch] = useState(false);
+  const [isCreatingBranch, setIsCreatingBranch] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const [isCommitting, setIsCommitting] = useState(false);
   const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
@@ -90,6 +95,7 @@ function App() {
   async function loadRepository(path: string, command: "open_repository" | "refresh_repository") {
     const nextRepository = await invoke<RepositoryState>(command, { path });
     setRepository(nextRepository);
+    setSelectedBranchName(nextRepository.currentBranch ?? nextRepository.localBranches[0] ?? "");
     setErrorMessage(null);
   }
 
@@ -168,6 +174,67 @@ function App() {
     }
   }
 
+  async function handleCheckoutBranch() {
+    if (!repository || !selectedBranchName) {
+      return;
+    }
+
+    setIsCheckingOutBranch(true);
+
+    try {
+      const nextRepository = await invoke<RepositoryState>("checkout_branch", {
+        path: repository.path,
+        branchName: selectedBranchName,
+      });
+
+      setRepository(nextRepository);
+      setSelectedBranchName(nextRepository.currentBranch ?? nextRepository.localBranches[0] ?? "");
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "No fue posible cambiar a la rama seleccionada.",
+      );
+    } finally {
+      setIsCheckingOutBranch(false);
+    }
+  }
+
+  async function handleCreateBranch() {
+    if (!repository) {
+      return;
+    }
+
+    const trimmedBranchName = newBranchName.trim();
+    if (!trimmedBranchName) {
+      setErrorMessage("Debes ingresar un nombre para la nueva rama.");
+      return;
+    }
+
+    setIsCreatingBranch(true);
+
+    try {
+      const nextRepository = await invoke<RepositoryState>("create_branch", {
+        path: repository.path,
+        branchName: trimmedBranchName,
+      });
+
+      setRepository(nextRepository);
+      setNewBranchName("");
+      setSelectedBranchName(nextRepository.currentBranch ?? nextRepository.localBranches[0] ?? "");
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "No fue posible crear la nueva rama.",
+      );
+    } finally {
+      setIsCreatingBranch(false);
+    }
+  }
+
   async function loadCommitDetail(path: string, commitSha: string) {
     setIsLoadingCommitDetail(true);
 
@@ -210,6 +277,18 @@ function App() {
   }, [repository, selectedCommitSha]);
 
   useEffect(() => {
+    if (!repository) {
+      setSelectedBranchName("");
+      return;
+    }
+
+    const preferredBranch = repository.currentBranch ?? repository.localBranches[0] ?? "";
+    if (!selectedBranchName || !repository.localBranches.includes(selectedBranchName)) {
+      setSelectedBranchName(preferredBranch);
+    }
+  }, [repository, selectedBranchName]);
+
+  useEffect(() => {
     if (!repository || !selectedCommitSha) {
       return;
     }
@@ -223,6 +302,11 @@ function App() {
         repository.status.unstagedChanges.length > 0),
   );
   const hasStagedChanges = Boolean(repository && repository.status.stagedChanges.length > 0);
+  const canCheckoutSelectedBranch = Boolean(
+    repository &&
+      selectedBranchName &&
+      selectedBranchName !== repository.currentBranch,
+  );
 
   return (
     <main className="app-shell">
@@ -364,6 +448,114 @@ function App() {
                 ni unstaged en este momento.
               </p>
             </div>
+          )}
+        </article>
+      </section>
+
+      <section className="commit-grid">
+        <article className="info-card">
+          <div className="card-header">
+            <span className="section-kicker">Ramas locales</span>
+            {repository ? (
+              <span className="status-pill">
+                {repository.localBranches.length > 0
+                  ? `${repository.localBranches.length} disponibles`
+                  : "Sin ramas"}
+              </span>
+            ) : null}
+          </div>
+
+          {!repository ? (
+            <p className="placeholder-copy">
+              Abre un repositorio para listar ramas locales y hacer checkout desde la app.
+            </p>
+          ) : repository.localBranches.length > 0 ? (
+            <form
+              className="branch-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleCheckoutBranch();
+              }}
+            >
+              <label className="field-label" htmlFor="branch-selector">
+                Cambiar de rama
+              </label>
+              <div className="branch-form__row">
+                <select
+                  id="branch-selector"
+                  className="branch-select"
+                  value={selectedBranchName}
+                  onChange={(event) => setSelectedBranchName(event.target.value)}
+                >
+                  {repository.localBranches.map((branchName) => (
+                    <option key={branchName} value={branchName}>
+                      {branchName}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="secondary-button"
+                  type="submit"
+                  disabled={!canCheckoutSelectedBranch || isCheckingOutBranch}
+                >
+                  {isCheckingOutBranch ? "Cambiando..." : "Hacer checkout"}
+                </button>
+              </div>
+              <p className="helper-text">
+                Rama actual: {repository.currentBranch ?? "HEAD desacoplado"}.
+              </p>
+            </form>
+          ) : (
+            <div className="empty-state empty-state--compact">
+              <h2>Sin ramas locales</h2>
+              <p>Este repositorio no expone ramas locales listas para checkout.</p>
+            </div>
+          )}
+        </article>
+
+        <article className="info-card">
+          <div className="card-header">
+            <span className="section-kicker">Nueva rama</span>
+            {repository ? <span className="status-pill">Crear y cambiar</span> : null}
+          </div>
+
+          {repository ? (
+            <form
+              className="branch-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleCreateBranch();
+              }}
+            >
+              <label className="field-label" htmlFor="new-branch-name">
+                Nombre de rama
+              </label>
+              <input
+                id="new-branch-name"
+                className="branch-input"
+                type="text"
+                value={newBranchName}
+                onChange={(event) => setNewBranchName(event.target.value)}
+                placeholder="feature/cambiar-rama"
+                autoComplete="off"
+              />
+              <div className="commit-form__footer">
+                <p className="helper-text">
+                  Usa un nombre válido de Git. La nueva rama se creará desde `HEAD` y quedará activa.
+                </p>
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={isCreatingBranch}
+                >
+                  {isCreatingBranch ? "Creando rama..." : "Crear rama"}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <p className="placeholder-copy">
+              Abre un repositorio para crear una rama nueva sin usar la terminal.
+            </p>
           )}
         </article>
       </section>

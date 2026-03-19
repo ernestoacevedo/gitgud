@@ -401,6 +401,12 @@ textarea {
   gap: 16px;
 }
 
+.branch-form {
+  margin-top: 26px;
+  display: grid;
+  gap: 16px;
+}
+
 .field-label,
 .history-author,
 .commit-sha {
@@ -424,7 +430,32 @@ textarea {
   min-height: 132px;
 }
 
+.branch-input,
+.branch-select {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  padding: 14px 16px;
+  color: #f6efe3;
+  background: rgba(8, 8, 12, 0.5);
+}
+
+.branch-select {
+  appearance: none;
+}
+
+.branch-form__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+}
+
 .commit-input::placeholder {
+  color: rgba(246, 239, 227, 0.38);
+}
+
+.branch-input::placeholder {
   color: rgba(246, 239, 227, 0.38);
 }
 
@@ -625,6 +656,10 @@ textarea {
   }
 
   .history-row {
+    grid-template-columns: 1fr;
+  }
+
+  .branch-form__row {
     grid-template-columns: 1fr;
   }
 }
