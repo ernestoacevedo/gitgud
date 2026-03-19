@@ -1124,20 +1124,24 @@ const HistoryRow = memo(function HistoryRow({
         <div className="w-20 px-0 flex flex-col items-center shrink-0 relative py-0">
           <CommitGraph commit={commit} />
         </div>
-        <div className="flex-1 py-3 pr-6 border-b border-outline-variant/5">
-          <div className="flex items-center justify-between mb-0.5">
-            <h4 className="font-headline text-sm font-medium text-on-surface/80 group-hover:text-on-surface truncate pr-2">{commit.summary}</h4>
-            <span className="font-label text-[10px] text-on-surface-variant flex-shrink-0">{formatCompactDateTime(commit.authoredAt)}</span>
+        <div className="flex-1 min-w-0 py-3 pr-6 border-b border-outline-variant/5">
+          <div className="flex items-start justify-between gap-3 mb-0.5 min-w-0">
+            <h4 className="min-w-0 flex-1 font-headline text-sm font-medium text-on-surface/80 group-hover:text-on-surface truncate pr-2">
+              {commit.summary}
+            </h4>
+            <span className="font-label text-[10px] text-on-surface-variant shrink-0 max-w-[9rem] text-right leading-tight break-words">
+              {formatCompactDateTime(commit.authoredAt)}
+            </span>
           </div>
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex items-center gap-2 mt-1 min-w-0">
             {commit.isHead && (
-              <div className="bg-surface-container-high border-l-2 border-primary px-1.5 py-[1px] rounded flex items-center gap-1">
+              <div className="bg-surface-container-high border-l-2 border-primary px-1.5 py-[1px] rounded flex items-center gap-1 shrink-0">
                 <span className="material-symbols-outlined text-[10px] text-primary">call_split</span>
                 <span className="text-[9px] font-label text-primary font-bold">{branchName ?? "HEAD"}</span>
               </div>
             )}
-            <div className="text-[10px] font-label text-on-surface-variant truncate">{commit.authorName}</div>
-            <div className="text-[10px] font-mono text-outline-variant ml-auto font-medium">{commit.shortSha}</div>
+            <div className="min-w-0 text-[10px] font-label text-on-surface-variant truncate">{commit.authorName}</div>
+            <div className="text-[10px] font-mono text-outline-variant ml-auto font-medium shrink-0 pl-2">{commit.shortSha}</div>
           </div>
         </div>
       </div>
@@ -1165,18 +1169,18 @@ function CommitDetailPanel({ detail }: CommitDetailPanelProps) {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="p-6 border-b border-outline-variant/10 shrink-0">
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-surface-container-highest border border-primary/20 flex items-center justify-center text-primary font-bold text-lg font-headline">
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-full bg-surface-container-highest border border-primary/20 flex items-center justify-center text-primary font-bold text-lg font-headline shrink-0">
               {detail.authorName.charAt(0).toUpperCase()}
             </div>
-            <div>
-              <div className="text-sm font-bold font-headline text-on-surface">{detail.authorName}</div>
-              <div className="text-[10px] font-label text-on-surface-variant">Commited {formatDateTime(detail.authoredAt)}</div>
+            <div className="min-w-0">
+              <div className="text-sm font-bold font-headline text-on-surface break-words">{detail.authorName}</div>
+              <div className="text-[10px] font-label text-on-surface-variant break-words">Commited {formatDateTime(detail.authoredAt)}</div>
             </div>
           </div>
           <button
-            className={`bg-surface-container-highest px-2 py-1 rounded font-label text-[10px] font-bold tracking-widest border transition-colors ${copyState === 'copied' ? 'text-secondary border-secondary/50' : 'text-primary border-primary/20 hover:bg-primary/10'}`}
+            className={`bg-surface-container-highest px-2 py-1 rounded font-label text-[10px] font-bold tracking-widest border transition-colors shrink-0 ${copyState === 'copied' ? 'text-secondary border-secondary/50' : 'text-primary border-primary/20 hover:bg-primary/10'}`}
             type="button"
             onClick={() => void handleCopySha()}
             title={copyState === "copied" ? "SHA copiado" : "Copiar SHA completo"}
@@ -1184,7 +1188,9 @@ function CommitDetailPanel({ detail }: CommitDetailPanelProps) {
             {detail.fullSha.slice(0, 8)}
           </button>
         </div>
-        <h2 className="text-base font-bold font-headline text-on-surface leading-tight mb-2 whitespace-pre-wrap">{detail.message}</h2>
+        <h2 className="text-base font-bold font-headline text-on-surface leading-tight mb-2 whitespace-pre-wrap break-words">
+          {detail.message}
+        </h2>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 px-6 relative">
@@ -1195,15 +1201,15 @@ function CommitDetailPanel({ detail }: CommitDetailPanelProps) {
         {detail.fileChanges.length > 0 ? (
           <ul className="space-y-1">
             {detail.fileChanges.map((change) => (
-              <li key={`${detail.fullSha}-${change.path}`} className="group flex items-center justify-between p-2 rounded hover:bg-surface-variant transition-colors">
-                <div className="flex items-center gap-3">
-                  <span className={`text-[10px] font-bold uppercase ${change.kind === 'added' ? 'text-secondary' : change.kind === 'deleted' ? 'text-error' : 'text-tertiary-fixed'}`}>
+              <li key={`${detail.fullSha}-${change.path}`} className="group flex items-start gap-3 p-2 rounded hover:bg-surface-variant transition-colors">
+                <div className={`text-[10px] font-bold uppercase shrink-0 pt-0.5 ${change.kind === 'added' ? 'text-secondary' : change.kind === 'deleted' ? 'text-error' : 'text-tertiary-fixed'}`}>
+                  <span>
                     {CHANGE_LABELS[change.kind]}
                   </span>
-                  <p className="text-xs font-body text-on-surface">
-                    {change.previousPath ? `${change.previousPath} -> ${change.path}` : change.path}
-                  </p>
                 </div>
+                <p className="text-xs font-body text-on-surface break-all min-w-0">
+                    {change.previousPath ? `${change.previousPath} -> ${change.path}` : change.path}
+                </p>
               </li>
             ))}
           </ul>
