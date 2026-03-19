@@ -86,6 +86,7 @@ type FeedbackState = {
 type WorkspaceTab = {
   id: number;
   title: string;
+  customTitle: string | null;
   isPinned: boolean;
   repository: RepositoryState | null;
   feedback: FeedbackState | null;
@@ -99,6 +100,7 @@ type WorkspaceTab = {
 type PersistedTab = {
   repositoryPath: string | null;
   isPinned: boolean;
+  customTitle: string | null;
 };
 
 type PersistedSession = {
@@ -137,6 +139,7 @@ function createEmptyTab(id: number): WorkspaceTab {
   return {
     id,
     title: "Nuevo tab",
+    customTitle: null,
     isPinned: false,
     repository: null,
     feedback: null,
@@ -169,13 +172,14 @@ function parsePersistedSession(rawValue: string | null): PersistedSession | null
             {
               repositoryPath,
               isPinned: candidate.isPinned === true,
+              customTitle: typeof candidate.customTitle === "string" ? candidate.customTitle : null,
             },
           ];
         })
       : Array.isArray((parsedValue as { repositories?: unknown }).repositories)
         ? (parsedValue as { repositories: unknown[] }).repositories.flatMap((value) =>
             typeof value === "string"
-              ? [{ repositoryPath: value, isPinned: false }]
+              ? [{ repositoryPath: value, isPinned: false, customTitle: null }]
               : [],
           )
       : [];
@@ -222,6 +226,10 @@ function reorderTabs(tabs: WorkspaceTab[], draggedTabId: number, targetTabId: nu
   return sortTabsForDisplay(nextTabs);
 }
 
+function getTabLabel(tab: WorkspaceTab) {
+  return tab.customTitle?.trim() || tab.repository?.name || tab.title;
+}
+
 const DATE_TIME_FORMATTER = new Intl.DateTimeFormat("es-CL", {
   month: "2-digit",
   day: "2-digit",
@@ -244,6 +252,8 @@ function App() {
   const [nextTabId, setNextTabId] = useState(2);
   const [draggedTabId, setDraggedTabId] = useState<number | null>(null);
   const [tabContextMenu, setTabContextMenu] = useState<TabContextMenuState | null>(null);
+  const [renamingTabId, setRenamingTabId] = useState<number | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [isOpening, setIsOpening] = useState(false);
   const [activeStatusAction, setActiveStatusAction] = useState<string | null>(null);
   const [isCommitting, setIsCommitting] = useState(false);
@@ -255,6 +265,7 @@ function App() {
   const hasRestoredSessionRef = useRef(false);
   const refreshInFlightRef = useRef<Set<number>>(new Set());
   const tabContextMenuRef = useRef<HTMLDivElement | null>(null);
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const repository = activeTab?.repository ?? null;
@@ -304,7 +315,7 @@ function App() {
     const nextRepository = await invoke<RepositoryState>(command, { path });
     updateTab(tabId, (tab) => ({
       ...tab,
-      title: nextRepository.name,
+      title: tab.customTitle ?? nextRepository.name,
       repository: nextRepository,
       feedback: null,
     }));
@@ -356,6 +367,10 @@ function App() {
   }
 
   function handleDragStart(tabId: number) {
+    if (renamingTabId !== null) {
+      return;
+    }
+
     setDraggedTabId(tabId);
     setTabContextMenu(null);
   }
@@ -399,8 +414,42 @@ function App() {
     setTabContextMenu(null);
   }
 
+  function handleStartRenaming(tabId: number) {
+    const targetTab = tabs.find((tab) => tab.id === tabId);
+
+    if (!targetTab) {
+      return;
+    }
+
+    setRenameDraft(getTabLabel(targetTab));
+    setRenamingTabId(tabId);
+    setTabContextMenu(null);
+  }
+
+  function handleCommitRename() {
+    if (renamingTabId === null) {
+      return;
+    }
+
+    const normalizedTitle = renameDraft.trim();
+    updateTab(renamingTabId, (tab) => ({
+      ...tab,
+      customTitle: normalizedTitle.length > 0 ? normalizedTitle : null,
+      title: normalizedTitle.length > 0 ? normalizedTitle : tab.repository?.name ?? "Nuevo tab",
+    }));
+    setRenamingTabId(null);
+    setRenameDraft("");
+  }
+
+  function handleCancelRename() {
+    setRenamingTabId(null);
+    setRenameDraft("");
+  }
+
   function handleTabContextMenu(event: MouseEvent<HTMLButtonElement>, tabId: number) {
     event.preventDefault();
+    setRenamingTabId(null);
+    setRenameDraft("");
     setActiveTabId(tabId);
     setTabContextMenu({
       tabId,
@@ -648,6 +697,15 @@ function App() {
   }, [activeTab?.id]);
 
   useEffect(() => {
+    if (renamingTabId === null) {
+      return;
+    }
+
+    renameInputRef.current?.focus();
+    renameInputRef.current?.select();
+  }, [renamingTabId]);
+
+  useEffect(() => {
     let isCancelled = false;
 
     async function restorePersistedRepositories() {
@@ -678,7 +736,14 @@ function App() {
         }
 
         if (persistedTab.repositoryPath === null) {
-          return [{ ...createEmptyTab(index + 1), isPinned: persistedTab.isPinned }];
+          return [
+            {
+              ...createEmptyTab(index + 1),
+              isPinned: persistedTab.isPinned,
+              customTitle: persistedTab.customTitle,
+              title: persistedTab.customTitle ?? "Nuevo tab",
+            },
+          ];
         }
 
         if (result.status !== "fulfilled" || result.value === null) {
@@ -689,7 +754,8 @@ function App() {
           {
             ...createEmptyTab(index + 1),
             isPinned: persistedTab.isPinned,
-            title: result.value.name,
+            customTitle: persistedTab.customTitle,
+            title: persistedTab.customTitle ?? result.value.name,
             repository: result.value,
           },
         ];
@@ -767,6 +833,7 @@ function App() {
       tabs: tabs.map((tab) => ({
         repositoryPath: tab.repository?.path ?? null,
         isPinned: tab.isPinned,
+        customTitle: tab.customTitle,
       })),
       activeTabIndex,
     };
@@ -931,7 +998,7 @@ function App() {
               <button
                 key={tab.id}
                 type="button"
-                draggable
+                draggable={renamingTabId !== tab.id}
                 onDragStart={(event) => {
                   event.dataTransfer.effectAllowed = "move";
                   handleDragStart(tab.id);
@@ -944,7 +1011,29 @@ function App() {
                 onClick={() => setActiveTabId(tab.id)}
               >
                 <span className="material-symbols-outlined text-sm">{tab.isPinned ? "keep" : "terminal"}</span>
-                <span className="max-w-40 truncate">{tab.repository ? tab.repository.name : "Sin repo"}</span>
+                {renamingTabId === tab.id ? (
+                  <input
+                    ref={renameInputRef}
+                    value={renameDraft}
+                    onChange={(event) => setRenameDraft(event.target.value)}
+                    onBlur={handleCommitRename}
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        handleCommitRename();
+                      }
+
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        handleCancelRename();
+                      }
+                    }}
+                    className="w-40 rounded bg-[#192540] px-2 py-0.5 text-sm text-[#dee5ff] outline-none ring-1 ring-[#00D1FF]/40"
+                  />
+                ) : (
+                  <span className="max-w-40 truncate">{getTabLabel(tab)}</span>
+                )}
               </button>
             ))}
             <button
@@ -964,6 +1053,14 @@ function App() {
               onClick={(event) => event.stopPropagation()}
               onContextMenu={(event) => event.preventDefault()}
             >
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-[#dee5ff] transition-colors hover:bg-[#192540]"
+                onClick={() => handleStartRenaming(tabContextMenu.tabId)}
+              >
+                <span className="material-symbols-outlined text-sm">edit</span>
+                Renombrar tab
+              </button>
               <button
                 type="button"
                 className="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-xs text-[#dee5ff] transition-colors hover:bg-[#192540]"
