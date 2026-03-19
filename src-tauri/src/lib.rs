@@ -1,6 +1,7 @@
 use git2::{BranchType, Commit, Delta, DiffOptions, Repository, Signature, Status, StatusOptions};
 use serde::Serialize;
 use std::path::Path;
+use std::process::Command;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -35,10 +36,20 @@ struct RepositoryState {
     git_dir: String,
     current_branch: Option<String>,
     local_branches: Vec<String>,
+    upstream_status: Option<UpstreamStatus>,
     head_short_sha: Option<String>,
     is_bare: bool,
     status: RepositoryStatus,
     recent_commits: Vec<CommitSummary>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct UpstreamStatus {
+    remote_name: String,
+    branch_name: String,
+    ahead: usize,
+    behind: usize,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -117,6 +128,64 @@ fn local_branch_names(repository: &Repository) -> Result<Vec<String>, String> {
     Ok(branches)
 }
 
+fn upstream_status(repository: &Repository) -> Result<Option<UpstreamStatus>, String> {
+    let Some(current_branch) = current_branch_name(repository) else {
+        return Ok(None);
+    };
+
+    let branch = match repository.find_branch(&current_branch, BranchType::Local) {
+        Ok(branch) => branch,
+        Err(error) => {
+            return Err(format!(
+                "No fue posible cargar la rama local \"{current_branch}\": {error}"
+            ))
+        }
+    };
+    let upstream = match branch.upstream() {
+        Ok(upstream) => upstream,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+            "No fue posible cargar la rama remota configurada para \"{current_branch}\": {error}"
+        ))
+        }
+    };
+
+    let local_oid = branch
+        .get()
+        .target()
+        .ok_or_else(|| format!("La rama local \"{current_branch}\" no apunta a ningun commit."))?;
+    let upstream_oid = upstream.get().target().ok_or_else(|| {
+        format!("La rama remota configurada para \"{current_branch}\" no apunta a ningun commit.")
+    })?;
+    let (ahead, behind) = repository
+        .graph_ahead_behind(local_oid, upstream_oid)
+        .map_err(|error| {
+            format!("No fue posible comparar la rama local con su upstream: {error}")
+        })?;
+    let branch_name = upstream
+        .name()
+        .ok()
+        .flatten()
+        .and_then(|reference| reference.strip_prefix("refs/remotes/"))
+        .map(str::to_owned)
+        .or_else(|| upstream.name().ok().flatten().map(str::to_owned))
+        .unwrap_or_else(|| "upstream desconocido".to_string());
+    let remote_name = branch_name
+        .split('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or("remoto")
+        .to_string();
+
+    Ok(Some(UpstreamStatus {
+        remote_name,
+        branch_name,
+        ahead,
+        behind,
+    }))
+}
+
 fn display_commit_summary(commit: &Commit) -> String {
     commit
         .summary()
@@ -133,7 +202,10 @@ fn display_author_name(commit: &Commit) -> String {
 }
 
 fn display_signature_name(signature: &git2::Signature<'_>, fallback: &str) -> String {
-    signature.name().map(str::to_owned).unwrap_or_else(|| fallback.to_string())
+    signature
+        .name()
+        .map(str::to_owned)
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn short_oid(oid: git2::Oid) -> String {
@@ -266,8 +338,9 @@ fn recent_commits(repository: &Repository) -> Result<Vec<CommitSummary>, String>
     let mut active_lanes = Vec::new();
 
     for oid in revwalk.take(20) {
-        let oid =
-            oid.map_err(|error| format!("No fue posible recorrer el historial del repositorio: {error}"))?;
+        let oid = oid.map_err(|error| {
+            format!("No fue posible recorrer el historial del repositorio: {error}")
+        })?;
         let commit = repository
             .find_commit(oid)
             .map_err(|error| format!("No fue posible cargar un commit del historial: {error}"))?;
@@ -288,7 +361,9 @@ fn recent_commits(repository: &Repository) -> Result<Vec<CommitSummary>, String>
             next_active_lanes[lane] = parent_ids[0];
 
             for (offset, parent_id) in parent_ids.iter().skip(1).enumerate() {
-                if let Some(existing_index) = next_active_lanes.iter().position(|active_oid| active_oid == parent_id)
+                if let Some(existing_index) = next_active_lanes
+                    .iter()
+                    .position(|active_oid| active_oid == parent_id)
                 {
                     if existing_index != lane {
                         next_active_lanes.remove(existing_index);
@@ -308,11 +383,21 @@ fn recent_commits(repository: &Repository) -> Result<Vec<CommitSummary>, String>
 
         let parent_lanes = parent_ids
             .iter()
-            .filter_map(|parent_id| deduped_lanes.iter().position(|active_oid| active_oid == parent_id))
+            .filter_map(|parent_id| {
+                deduped_lanes
+                    .iter()
+                    .position(|active_oid| active_oid == parent_id)
+            })
             .collect::<Vec<_>>();
         let visible_lane_count = active_lane_count
             .max(deduped_lanes.len())
-            .max(parent_lanes.iter().copied().max().map_or(0, |max_lane| max_lane + 1))
+            .max(
+                parent_lanes
+                    .iter()
+                    .copied()
+                    .max()
+                    .map_or(0, |max_lane| max_lane + 1),
+            )
             .max(lane + 1);
 
         commits.push(CommitSummary {
@@ -340,23 +425,27 @@ fn commit_detail(repository: &Repository, revision: &str) -> Result<CommitDetail
     let commit = object
         .peel_to_commit()
         .map_err(|error| format!("No fue posible cargar el commit seleccionado: {error}"))?;
-    let tree = commit
-        .tree()
-        .map_err(|error| format!("No fue posible leer el arbol del commit seleccionado: {error}"))?;
+    let tree = commit.tree().map_err(|error| {
+        format!("No fue posible leer el arbol del commit seleccionado: {error}")
+    })?;
     let parent_tree = match commit.parent_count() {
         0 => None,
         _ => Some(
             commit
                 .parent(0)
                 .and_then(|parent| parent.tree())
-                .map_err(|error| format!("No fue posible leer el padre del commit seleccionado: {error}"))?,
+                .map_err(|error| {
+                    format!("No fue posible leer el padre del commit seleccionado: {error}")
+                })?,
         ),
     };
     let mut diff_options = DiffOptions::new();
     diff_options.include_typechange(true);
     let diff = repository
         .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut diff_options))
-        .map_err(|error| format!("No fue posible leer los archivos cambiados del commit: {error}"))?;
+        .map_err(|error| {
+            format!("No fue posible leer los archivos cambiados del commit: {error}")
+        })?;
 
     let mut file_changes = Vec::new();
     for delta in diff.deltas() {
@@ -364,8 +453,14 @@ fn commit_detail(repository: &Repository, revision: &str) -> Result<CommitDetail
             continue;
         };
 
-        let old_path = delta.old_file().path().map(|path| path.display().to_string());
-        let new_path = delta.new_file().path().map(|path| path.display().to_string());
+        let old_path = delta
+            .old_file()
+            .path()
+            .map(|path| path.display().to_string());
+        let new_path = delta
+            .new_file()
+            .path()
+            .map(|path| path.display().to_string());
         let path = match (&new_path, &old_path) {
             (Some(path), _) if !path.is_empty() => path.clone(),
             (_, Some(path)) if !path.is_empty() => path.clone(),
@@ -446,7 +541,10 @@ fn create_commit_for_repository(repository: &Repository, message: &str) -> Resul
         .find_tree(tree_id)
         .map_err(|error| format!("No fue posible cargar el arbol del commit: {error}"))?;
 
-    let parent_commit = repository.head().ok().and_then(|head| head.peel_to_commit().ok());
+    let parent_commit = repository
+        .head()
+        .ok()
+        .and_then(|head| head.peel_to_commit().ok());
     let parent_refs = parent_commit.iter().collect::<Vec<_>>();
 
     repository
@@ -479,15 +577,139 @@ fn ensure_valid_branch_name(name: &str) -> Result<String, String> {
     Ok(trimmed_name.to_string())
 }
 
-fn checkout_local_branch_for_repository(repository: &Repository, branch_name: &str) -> Result<(), String> {
+fn ensure_has_remote(repository: &Repository) -> Result<(), String> {
+    let remotes = repository
+        .remotes()
+        .map_err(|error| format!("No fue posible listar los remotos configurados: {error}"))?;
+
+    if remotes.is_empty() {
+        return Err(
+            "El repositorio no tiene remotos configurados. Agrega un remoto, por ejemplo \"origin\", antes de sincronizar."
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+fn tracked_branch_for_repository(repository: &Repository) -> Result<(String, String), String> {
+    let current_branch = current_branch_name(repository).ok_or_else(|| {
+        "Debes estar en una rama local para ejecutar esta sincronizacion.".to_string()
+    })?;
+    let branch = repository
+        .find_branch(&current_branch, BranchType::Local)
+        .map_err(|error| {
+            format!("No fue posible cargar la rama local \"{current_branch}\": {error}")
+        })?;
+    let upstream = branch.upstream().map_err(|error| {
+        if error.code() == git2::ErrorCode::NotFound {
+            format!(
+                "La rama \"{current_branch}\" no tiene upstream configurado. Configurala antes de usar pull o push desde la app."
+            )
+        } else {
+            format!(
+                "No fue posible cargar la rama remota configurada para \"{current_branch}\": {error}"
+            )
+        }
+    })?;
+    let upstream_name = upstream
+        .name()
+        .ok()
+        .flatten()
+        .map(str::to_owned)
+        .unwrap_or_else(|| "upstream desconocido".to_string());
+
+    Ok((current_branch, upstream_name))
+}
+
+#[derive(Clone, Copy)]
+enum RemoteOperation {
+    Fetch,
+    Pull,
+    Push,
+}
+
+impl RemoteOperation {
+    fn as_git_subcommand(self) -> &'static str {
+        match self {
+            Self::Fetch => "fetch",
+            Self::Pull => "pull",
+            Self::Push => "push",
+        }
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Fetch => "fetch",
+            Self::Pull => "pull",
+            Self::Push => "push",
+        }
+    }
+}
+
+fn execute_remote_operation(
+    repository: &Repository,
+    operation: RemoteOperation,
+) -> Result<(), String> {
+    ensure_has_remote(repository)?;
+
+    if matches!(operation, RemoteOperation::Pull | RemoteOperation::Push) {
+        tracked_branch_for_repository(repository)?;
+    }
+
+    let command_path = repository
+        .workdir()
+        .unwrap_or_else(|| repository.path())
+        .to_path_buf();
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&command_path)
+        .arg(operation.as_git_subcommand())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|error| {
+            format!(
+                "No fue posible ejecutar {} con el cliente Git del sistema: {error}",
+                operation.display_name()
+            )
+        })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let details = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        "Git devolvio un error sin detalles.".to_string()
+    };
+
+    Err(format!(
+        "Git no pudo ejecutar {}. Revisa la autenticacion, el remoto configurado y el estado de tu rama. Detalle: {}",
+        operation.display_name(),
+        details
+    ))
+}
+
+fn checkout_local_branch_for_repository(
+    repository: &Repository,
+    branch_name: &str,
+) -> Result<(), String> {
     let branch = repository
         .find_branch(branch_name, BranchType::Local)
-        .map_err(|error| format!("No fue posible encontrar la rama local \"{branch_name}\": {error}"))?;
-    let reference = branch
-        .into_reference();
+        .map_err(|error| {
+            format!("No fue posible encontrar la rama local \"{branch_name}\": {error}")
+        })?;
+    let reference = branch.into_reference();
     let reference_name = reference
         .name()
-        .ok_or_else(|| format!("No fue posible resolver la referencia de la rama \"{branch_name}\"."))?
+        .ok_or_else(|| {
+            format!("No fue posible resolver la referencia de la rama \"{branch_name}\".")
+        })?
         .to_string();
     let object = reference
         .peel(git2::ObjectType::Commit)
@@ -522,7 +744,9 @@ fn create_branch_for_repository(repository: &Repository, branch_name: &str) -> R
 
     repository
         .branch(&valid_branch_name, &head_commit, false)
-        .map_err(|error| format!("Git rechazo la creacion de la rama \"{valid_branch_name}\": {error}"))?;
+        .map_err(|error| {
+            format!("Git rechazo la creacion de la rama \"{valid_branch_name}\": {error}")
+        })?;
 
     checkout_local_branch_for_repository(repository, &valid_branch_name)
 }
@@ -543,6 +767,7 @@ fn repository_state_from_path(path: &Path) -> Result<RepositoryState, String> {
         git_dir: repository.path().display().to_string(),
         current_branch: current_branch_name(&repository),
         local_branches: local_branch_names(&repository)?,
+        upstream_status: upstream_status(&repository)?,
         head_short_sha: short_head_sha(&repository),
         is_bare: repository.is_bare(),
         status: repository_status(&repository)?,
@@ -562,32 +787,63 @@ fn refresh_repository(path: String) -> Result<RepositoryState, String> {
 
 #[tauri::command]
 fn create_commit(path: String, message: String) -> Result<RepositoryState, String> {
-    let repository = Repository::open(Path::new(&path))
-        .map_err(|error| format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}"))?;
+    let repository = Repository::open(Path::new(&path)).map_err(|error| {
+        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
+    })?;
     create_commit_for_repository(&repository, &message)?;
     repository_state_from_path(Path::new(&path))
 }
 
 #[tauri::command]
 fn checkout_branch(path: String, branch_name: String) -> Result<RepositoryState, String> {
-    let repository = Repository::open(Path::new(&path))
-        .map_err(|error| format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}"))?;
+    let repository = Repository::open(Path::new(&path)).map_err(|error| {
+        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
+    })?;
     checkout_local_branch_for_repository(&repository, &branch_name)?;
     repository_state_from_path(Path::new(&path))
 }
 
 #[tauri::command]
 fn create_branch(path: String, branch_name: String) -> Result<RepositoryState, String> {
-    let repository = Repository::open(Path::new(&path))
-        .map_err(|error| format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}"))?;
+    let repository = Repository::open(Path::new(&path)).map_err(|error| {
+        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
+    })?;
     create_branch_for_repository(&repository, &branch_name)?;
     repository_state_from_path(Path::new(&path))
 }
 
 #[tauri::command]
+fn fetch_remote(path: String) -> Result<RepositoryState, String> {
+    let repository = Repository::open(Path::new(&path)).map_err(|error| {
+        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
+    })?;
+    execute_remote_operation(&repository, RemoteOperation::Fetch)?;
+    repository_state_from_path(Path::new(&path))
+}
+
+#[tauri::command]
+fn pull_remote(path: String) -> Result<RepositoryState, String> {
+    let repository = Repository::open(Path::new(&path)).map_err(|error| {
+        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
+    })?;
+    execute_remote_operation(&repository, RemoteOperation::Pull)?;
+    repository_state_from_path(Path::new(&path))
+}
+
+#[tauri::command]
+fn push_remote(path: String) -> Result<RepositoryState, String> {
+    let repository = Repository::open(Path::new(&path)).map_err(|error| {
+        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
+    })?;
+    execute_remote_operation(&repository, RemoteOperation::Push)?;
+    repository_state_from_path(Path::new(&path))
+}
+
+#[tauri::command]
 fn read_commit_detail(path: String, commit_sha: String) -> Result<CommitDetail, String> {
-    let repository = Repository::open(Path::new(&path))
-        .map_err(|error| format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}"))?;
+    let repository = Repository::open(Path::new(&path)).map_err(|error| {
+        format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
+    })?;
     commit_detail(&repository, &commit_sha)
 }
 
@@ -602,6 +858,9 @@ pub fn run() {
             create_commit,
             checkout_branch,
             create_branch,
+            fetch_remote,
+            pull_remote,
+            push_remote,
             read_commit_detail
         ])
         .run(tauri::generate_context!())
@@ -612,12 +871,13 @@ pub fn run() {
 mod tests {
     use super::{
         checkout_local_branch_for_repository, commit_detail, create_branch_for_repository,
-        create_commit_for_repository, ensure_valid_branch_name, repository_state_from_path, ChangeKind,
-        ChangedFile,
+        create_commit_for_repository, ensure_valid_branch_name, execute_remote_operation,
+        repository_state_from_path, ChangeKind, ChangedFile, RemoteOperation,
     };
     use git2::{BranchType, IndexAddOption, Repository, Signature};
     use std::fs;
     use std::path::Path;
+    use std::process::Command;
     use tempfile::tempdir;
 
     fn commit_all(repository: &Repository, signature: &Signature<'_>, message: &str) -> git2::Oid {
@@ -628,7 +888,10 @@ mod tests {
         index.write().expect("write index");
         let tree_id = index.write_tree().expect("write tree");
         let tree = repository.find_tree(tree_id).expect("find tree");
-        let parent_commit = repository.head().ok().and_then(|head| head.peel_to_commit().ok());
+        let parent_commit = repository
+            .head()
+            .ok()
+            .and_then(|head| head.peel_to_commit().ok());
         let parent_refs = parent_commit.iter().collect::<Vec<_>>();
 
         repository
@@ -643,6 +906,41 @@ mod tests {
             .expect("commit")
     }
 
+    fn run_git(args: &[&str], workdir: &Path) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .output()
+            .expect("run git");
+
+        if !output.status.success() {
+            panic!(
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    fn clone_repository(remote_path: &Path, clone_path: &Path) -> Repository {
+        let remote = remote_path.display().to_string();
+        run_git(
+            &["clone", &remote, &clone_path.display().to_string()],
+            remote_path.parent().expect("parent"),
+        );
+        Repository::open(clone_path).expect("open clone")
+    }
+
+    fn configure_identity(repository_path: &Path) {
+        run_git(&["config", "user.name", "GitGud Tester"], repository_path);
+        run_git(
+            &["config", "user.email", "tester@example.com"],
+            repository_path,
+        );
+    }
+
     #[test]
     fn loads_repository_state_for_valid_repo() {
         let directory = tempdir().expect("tempdir");
@@ -651,7 +949,11 @@ mod tests {
 
         fs::write(directory.path().join("README.md"), "# GitGud\n").expect("write readme");
         commit_all(&repository, &signature, "Initial commit");
-        repository.index().expect("index").write().expect("write index");
+        repository
+            .index()
+            .expect("index")
+            .write()
+            .expect("write index");
 
         let state = repository_state_from_path(directory.path()).expect("state");
         let resolved_state_path = fs::canonicalize(Path::new(&state.path)).expect("state path");
@@ -719,7 +1021,10 @@ mod tests {
 
         assert!(branch_names.iter().any(|name| name == "feature/us-001"));
         assert_eq!(state.current_branch.as_deref(), Some("feature/us-001"));
-        assert!(state.local_branches.iter().any(|name| name == "feature/us-001"));
+        assert!(state
+            .local_branches
+            .iter()
+            .any(|name| name == "feature/us-001"));
     }
 
     #[test]
@@ -746,7 +1051,10 @@ mod tests {
         let state = repository_state_from_path(directory.path()).expect("state");
 
         assert_eq!(state.current_branch.as_deref(), Some("feature/us-007"));
-        assert!(state.local_branches.iter().any(|name| name == "feature/us-007"));
+        assert!(state
+            .local_branches
+            .iter()
+            .any(|name| name == "feature/us-007"));
     }
 
     #[test]
@@ -762,7 +1070,8 @@ mod tests {
             .branch("feature/existing", &commit, false)
             .expect("create branch");
 
-        checkout_local_branch_for_repository(&repository, "feature/existing").expect("checkout branch");
+        checkout_local_branch_for_repository(&repository, "feature/existing")
+            .expect("checkout branch");
 
         let state = repository_state_from_path(directory.path()).expect("state");
 
@@ -781,11 +1090,13 @@ mod tests {
         repository
             .branch("feature/conflict", &commit, false)
             .expect("create branch");
-        checkout_local_branch_for_repository(&repository, "feature/conflict").expect("checkout feature");
+        checkout_local_branch_for_repository(&repository, "feature/conflict")
+            .expect("checkout feature");
         fs::write(directory.path().join("tracked.txt"), "branch change\n").expect("branch change");
         commit_all(&repository, &signature, "branch commit");
 
-        fs::write(directory.path().join("tracked.txt"), "dirty worktree\n").expect("dirty worktree");
+        fs::write(directory.path().join("tracked.txt"), "dirty worktree\n")
+            .expect("dirty worktree");
 
         let error = checkout_local_branch_for_repository(&repository, "master")
             .expect_err("expected checkout error");
@@ -808,9 +1119,14 @@ mod tests {
 
         fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
         commit_all(&repository, &signature, "init");
-        repository.index().expect("index").write().expect("write index");
+        repository
+            .index()
+            .expect("index")
+            .write()
+            .expect("write index");
 
-        fs::write(directory.path().join("tracked.txt"), "base\nworktree\n").expect("modify tracked");
+        fs::write(directory.path().join("tracked.txt"), "base\nworktree\n")
+            .expect("modify tracked");
         fs::write(directory.path().join("staged.txt"), "ready\n").expect("write staged");
         let mut index = repository.index().expect("index");
         index
@@ -846,7 +1162,11 @@ mod tests {
         fs::write(directory.path().join("delete-me.txt"), "delete\n").expect("write delete");
 
         commit_all(&repository, &signature, "init");
-        repository.index().expect("index").write().expect("write index");
+        repository
+            .index()
+            .expect("index")
+            .write()
+            .expect("write index");
 
         fs::rename(
             directory.path().join("rename-me.txt"),
@@ -857,7 +1177,9 @@ mod tests {
         index
             .remove_path(Path::new("rename-me.txt"))
             .expect("remove old rename path");
-        index.add_path(Path::new("renamed.txt")).expect("add renamed file");
+        index
+            .add_path(Path::new("renamed.txt"))
+            .expect("add renamed file");
         index
             .remove_path(Path::new("delete-me.txt"))
             .expect("remove deleted path");
@@ -918,10 +1240,18 @@ mod tests {
         assert!(state.status.staged_changes.is_empty());
         assert!(state.recent_commits.len() >= 2);
         assert_eq!(state.recent_commits[0].summary, "Save staged work");
-        assert_eq!(state.head_short_sha.as_deref(), Some(state.recent_commits[0].short_sha.as_str()));
+        assert_eq!(
+            state.head_short_sha.as_deref(),
+            Some(state.recent_commits[0].short_sha.as_str())
+        );
         assert_eq!(
             state.recent_commits[0].full_sha,
-            repository.head().expect("head").target().expect("head target").to_string()
+            repository
+                .head()
+                .expect("head")
+                .target()
+                .expect("head target")
+                .to_string()
         );
         assert!(state.recent_commits[0].is_head);
     }
@@ -989,13 +1319,11 @@ mod tests {
         assert!(merge_commit.is_head);
         assert_eq!(merge_commit.parent_lanes.len(), 2);
         assert!(merge_commit.visible_lane_count >= 2);
-        assert!(
-            state
-                .recent_commits
-                .iter()
-                .skip(1)
-                .any(|commit| commit.short_sha == short_sha(feature_commit_id))
-        );
+        assert!(state
+            .recent_commits
+            .iter()
+            .skip(1)
+            .any(|commit| commit.short_sha == short_sha(feature_commit_id)));
     }
 
     #[test]
@@ -1014,7 +1342,8 @@ mod tests {
             .set_str("user.email", "tester@example.com")
             .expect("set user.email");
 
-        let error = create_commit_for_repository(&repository, "Empty commit").expect_err("expected error");
+        let error =
+            create_commit_for_repository(&repository, "Empty commit").expect_err("expected error");
 
         assert!(error.contains("No hay cambios staged"));
     }
@@ -1045,20 +1374,16 @@ mod tests {
         assert_eq!(detail.author_name, "GitGud");
         assert_eq!(detail.author_email.as_deref(), Some("gitgud@example.com"));
         assert_eq!(detail.parent_shas.len(), 1);
-        assert!(
-            detail.file_changes.contains(&super::CommitFileChange {
-                path: "added.txt".to_string(),
-                previous_path: None,
-                kind: ChangeKind::Added,
-            })
-        );
-        assert!(
-            detail.file_changes.contains(&super::CommitFileChange {
-                path: "tracked.txt".to_string(),
-                previous_path: None,
-                kind: ChangeKind::Modified,
-            })
-        );
+        assert!(detail.file_changes.contains(&super::CommitFileChange {
+            path: "added.txt".to_string(),
+            previous_path: None,
+            kind: ChangeKind::Added,
+        }));
+        assert!(detail.file_changes.contains(&super::CommitFileChange {
+            path: "tracked.txt".to_string(),
+            previous_path: None,
+            kind: ChangeKind::Modified,
+        }));
         assert!(detail.file_list_notice.is_none());
     }
 
@@ -1068,7 +1393,11 @@ mod tests {
         let repository = Repository::init(directory.path()).expect("repo init");
         let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
 
-        let tree_id = repository.index().expect("index").write_tree().expect("write tree");
+        let tree_id = repository
+            .index()
+            .expect("index")
+            .write_tree()
+            .expect("write tree");
         let tree = repository.find_tree(tree_id).expect("tree");
         let commit_id = repository
             .commit(Some("HEAD"), &signature, &signature, "empty", &tree, &[])
@@ -1078,6 +1407,120 @@ mod tests {
 
         assert!(detail.file_changes.is_empty());
         assert!(detail.file_list_notice.is_some());
+    }
+
+    #[test]
+    fn fetch_updates_upstream_ahead_behind_counts() {
+        let remote_dir = tempdir().expect("remote tempdir");
+        let local_dir = tempdir().expect("local tempdir");
+        let peer_dir = tempdir().expect("peer tempdir");
+
+        let remote_repository = Repository::init_bare(remote_dir.path()).expect("init bare");
+        drop(remote_repository);
+
+        let local_path = local_dir.path().join("local");
+        let peer_path = peer_dir.path().join("peer");
+        let local_repository = clone_repository(remote_dir.path(), &local_path);
+        configure_identity(&local_path);
+
+        fs::write(local_path.join("tracked.txt"), "base\n").expect("write local");
+        run_git(&["add", "tracked.txt"], &local_path);
+        run_git(&["commit", "-m", "base"], &local_path);
+        run_git(&["push", "-u", "origin", "master"], &local_path);
+
+        let peer_repository = clone_repository(remote_dir.path(), &peer_path);
+        configure_identity(&peer_path);
+        fs::write(peer_path.join("remote.txt"), "remote change\n").expect("write peer");
+        run_git(&["add", "remote.txt"], &peer_path);
+        run_git(&["commit", "-m", "remote update"], &peer_path);
+        run_git(&["push"], &peer_path);
+        drop(peer_repository);
+
+        execute_remote_operation(&local_repository, RemoteOperation::Fetch).expect("fetch");
+
+        let state = repository_state_from_path(&local_path).expect("state");
+        let upstream = state.upstream_status.expect("upstream status");
+
+        assert_eq!(upstream.remote_name, "origin");
+        assert_eq!(upstream.branch_name, "origin/master");
+        assert_eq!(upstream.ahead, 0);
+        assert_eq!(upstream.behind, 1);
+    }
+
+    #[test]
+    fn pull_updates_local_history_after_remote_change() {
+        let remote_dir = tempdir().expect("remote tempdir");
+        let local_dir = tempdir().expect("local tempdir");
+        let peer_dir = tempdir().expect("peer tempdir");
+
+        let remote_repository = Repository::init_bare(remote_dir.path()).expect("init bare");
+        drop(remote_repository);
+
+        let local_path = local_dir.path().join("local");
+        let peer_path = peer_dir.path().join("peer");
+        let local_repository = clone_repository(remote_dir.path(), &local_path);
+        configure_identity(&local_path);
+
+        fs::write(local_path.join("tracked.txt"), "base\n").expect("write local");
+        run_git(&["add", "tracked.txt"], &local_path);
+        run_git(&["commit", "-m", "base"], &local_path);
+        run_git(&["push", "-u", "origin", "master"], &local_path);
+
+        let peer_repository = clone_repository(remote_dir.path(), &peer_path);
+        configure_identity(&peer_path);
+        fs::write(peer_path.join("tracked.txt"), "base\nremote update\n").expect("write peer");
+        run_git(&["add", "tracked.txt"], &peer_path);
+        run_git(&["commit", "-m", "remote update"], &peer_path);
+        run_git(&["push"], &peer_path);
+        drop(peer_repository);
+
+        execute_remote_operation(&local_repository, RemoteOperation::Pull).expect("pull");
+
+        let state = repository_state_from_path(&local_path).expect("state");
+        let upstream = state.upstream_status.expect("upstream status");
+
+        assert_eq!(state.recent_commits[0].summary, "remote update");
+        assert_eq!(upstream.ahead, 0);
+        assert_eq!(upstream.behind, 0);
+        assert!(state.status.staged_changes.is_empty());
+        assert!(state.status.unstaged_changes.is_empty());
+    }
+
+    #[test]
+    fn push_updates_upstream_after_local_commit() {
+        let remote_dir = tempdir().expect("remote tempdir");
+        let local_dir = tempdir().expect("local tempdir");
+
+        let remote_repository = Repository::init_bare(remote_dir.path()).expect("init bare");
+        drop(remote_repository);
+
+        let local_path = local_dir.path().join("local");
+        let local_repository = clone_repository(remote_dir.path(), &local_path);
+        configure_identity(&local_path);
+
+        fs::write(local_path.join("tracked.txt"), "base\n").expect("write local");
+        run_git(&["add", "tracked.txt"], &local_path);
+        run_git(&["commit", "-m", "base"], &local_path);
+        run_git(&["push", "-u", "origin", "master"], &local_path);
+
+        fs::write(local_path.join("tracked.txt"), "base\nlocal update\n").expect("update local");
+        run_git(&["add", "tracked.txt"], &local_path);
+        run_git(&["commit", "-m", "local update"], &local_path);
+
+        let state_before_push = repository_state_from_path(&local_path).expect("state before push");
+        assert_eq!(
+            state_before_push.upstream_status.expect("upstream").ahead,
+            1
+        );
+
+        execute_remote_operation(&local_repository, RemoteOperation::Push).expect("push");
+
+        let state = repository_state_from_path(&local_path).expect("state after push");
+        let upstream = state.upstream_status.expect("upstream status");
+
+        assert_eq!(state.recent_commits[0].summary, "local update");
+        assert_eq!(upstream.ahead, 0);
+        assert_eq!(upstream.behind, 0);
     }
 
     fn short_sha(oid: git2::Oid) -> String {

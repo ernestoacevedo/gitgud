@@ -407,6 +407,57 @@ textarea {
   gap: 16px;
 }
 
+.sync-panel {
+  margin-top: 26px;
+  display: grid;
+  gap: 18px;
+}
+
+.sync-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.sync-summary {
+  display: grid;
+  gap: 14px;
+}
+
+.sync-metrics {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.sync-metrics div {
+  padding: 16px 18px;
+  border-radius: 20px;
+  background: rgba(9, 8, 13, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.sync-metrics dt {
+  margin-bottom: 8px;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(246, 239, 227, 0.55);
+}
+
+.sync-metrics dd {
+  margin: 0;
+  font-family: "Helvetica Neue", Arial, sans-serif;
+  color: rgba(246, 239, 227, 0.88);
+  word-break: break-word;
+}
+
+.sync-feedback-card {
+  margin-top: 0;
+}
+
 .field-label,
 .history-author,
 .commit-sha {
@@ -660,6 +711,10 @@ textarea {
   }
 
   .branch-form__row {
+    grid-template-columns: 1fr;
+  }
+
+  .sync-metrics {
     grid-template-columns: 1fr;
   }
 }

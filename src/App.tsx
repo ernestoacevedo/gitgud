@@ -27,10 +27,18 @@ type RepositoryState = {
   gitDir: string;
   currentBranch: string | null;
   localBranches: string[];
+  upstreamStatus: UpstreamStatus | null;
   headShortSha: string | null;
   isBare: boolean;
   status: RepositoryStatus;
   recentCommits: CommitSummary[];
+};
+
+type UpstreamStatus = {
+  remoteName: string;
+  branchName: string;
+  ahead: number;
+  behind: number;
 };
 
 type CommitSummary = {
@@ -87,6 +95,10 @@ function App() {
   const [isCreatingBranch, setIsCreatingBranch] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const [isCommitting, setIsCommitting] = useState(false);
+  const [activeRemoteOperation, setActiveRemoteOperation] = useState<
+    "fetch" | "pull" | "push" | null
+  >(null);
+  const [remoteStatusMessage, setRemoteStatusMessage] = useState<string | null>(null);
   const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
   const [selectedCommitDetail, setSelectedCommitDetail] = useState<CommitDetail | null>(null);
   const [isLoadingCommitDetail, setIsLoadingCommitDetail] = useState(false);
@@ -97,6 +109,7 @@ function App() {
     setRepository(nextRepository);
     setSelectedBranchName(nextRepository.currentBranch ?? nextRepository.localBranches[0] ?? "");
     setErrorMessage(null);
+    setRemoteStatusMessage(null);
   }
 
   async function handleOpenRepository() {
@@ -235,6 +248,40 @@ function App() {
     }
   }
 
+  async function handleRemoteOperation(operation: "fetch" | "pull" | "push") {
+    if (!repository) {
+      return;
+    }
+
+    const labels = {
+      fetch: "fetch",
+      pull: "pull",
+      push: "push",
+    };
+
+    setActiveRemoteOperation(operation);
+    setRemoteStatusMessage(`Ejecutando ${labels[operation]}...`);
+
+    try {
+      const nextRepository = await invoke<RepositoryState>(`${operation}_remote`, {
+        path: repository.path,
+      });
+
+      setRepository(nextRepository);
+      setErrorMessage(null);
+      setRemoteStatusMessage(`Se completó ${labels[operation]} y el repositorio fue actualizado.`);
+    } catch (error) {
+      setRemoteStatusMessage(null);
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : `No fue posible ejecutar ${labels[operation]} en el repositorio activo.`,
+      );
+    } finally {
+      setActiveRemoteOperation(null);
+    }
+  }
+
   async function loadCommitDetail(path: string, commitSha: string) {
     setIsLoadingCommitDetail(true);
 
@@ -307,6 +354,12 @@ function App() {
       selectedBranchName &&
       selectedBranchName !== repository.currentBranch,
   );
+  const upstreamStatus = repository?.upstreamStatus ?? null;
+  const remoteOperationLabels = {
+    fetch: "Fetch",
+    pull: "Pull",
+    push: "Push",
+  };
 
   return (
     <main className="app-shell">
@@ -455,6 +508,85 @@ function App() {
       <section className="commit-grid">
         <article className="info-card">
           <div className="card-header">
+            <span className="section-kicker">Sincronización remota</span>
+            {repository ? (
+              <span className="status-pill">
+                {activeRemoteOperation
+                  ? `${remoteOperationLabels[activeRemoteOperation]} en curso`
+                  : "Lista"}
+              </span>
+            ) : null}
+          </div>
+
+          {repository ? (
+            <div className="sync-panel">
+              <div className="sync-actions">
+                {(["fetch", "pull", "push"] as const).map((operation) => (
+                  <button
+                    key={operation}
+                    className={operation === "push" ? "primary-button" : "secondary-button"}
+                    type="button"
+                    onClick={() => void handleRemoteOperation(operation)}
+                    disabled={activeRemoteOperation !== null}
+                  >
+                    {activeRemoteOperation === operation
+                      ? `${remoteOperationLabels[operation]}...`
+                      : remoteOperationLabels[operation]}
+                  </button>
+                ))}
+              </div>
+
+              <div className="sync-summary">
+                <p className="helper-text">
+                  Ejecuta `fetch`, `pull` o `push` con acciones separadas desde la app.
+                </p>
+
+                {upstreamStatus ? (
+                  <dl className="sync-metrics">
+                    <div>
+                      <dt>Tracking branch</dt>
+                      <dd>{upstreamStatus.branchName}</dd>
+                    </div>
+                    <div>
+                      <dt>Remote</dt>
+                      <dd>{upstreamStatus.remoteName}</dd>
+                    </div>
+                    <div>
+                      <dt>Ahead</dt>
+                      <dd>{upstreamStatus.ahead}</dd>
+                    </div>
+                    <div>
+                      <dt>Behind</dt>
+                      <dd>{upstreamStatus.behind}</dd>
+                    </div>
+                  </dl>
+                ) : (
+                  <div className="feedback-card feedback-card--warning sync-feedback-card">
+                    <span className="feedback-label">Atención</span>
+                    <p>
+                      La rama actual no tiene upstream configurado o el remoto todavía no expone
+                      una rama de tracking utilizable para `pull` y `push`.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {remoteStatusMessage ? (
+                <div className="feedback-card sync-feedback-card" role="status">
+                  <span className="feedback-label">Estado</span>
+                  <p>{remoteStatusMessage}</p>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <p className="placeholder-copy">
+              Abre un repositorio con remoto configurado para sincronizar cambios desde la app.
+            </p>
+          )}
+        </article>
+
+        <article className="info-card">
+          <div className="card-header">
             <span className="section-kicker">Ramas locales</span>
             {repository ? (
               <span className="status-pill">
@@ -546,7 +678,7 @@ function App() {
                 <button
                   className="primary-button"
                   type="submit"
-                  disabled={isCreatingBranch}
+                  disabled={isCreatingBranch || !newBranchName.trim()}
                 >
                   {isCreatingBranch ? "Creando rama..." : "Crear rama"}
                 </button>
@@ -597,7 +729,7 @@ function App() {
                 <button
                   className="primary-button"
                   type="submit"
-                  disabled={!hasStagedChanges || isCommitting}
+                  disabled={!hasStagedChanges || isCommitting || !commitMessage.trim()}
                 >
                   {isCommitting ? "Creando commit..." : "Crear commit"}
                 </button>
