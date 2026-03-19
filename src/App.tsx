@@ -29,6 +29,13 @@ type RepositoryState = {
   headShortSha: string | null;
   isBare: boolean;
   status: RepositoryStatus;
+  recentCommits: CommitSummary[];
+};
+
+type CommitSummary = {
+  shortSha: string;
+  summary: string;
+  authorName: string;
 };
 
 const CHANGE_LABELS: Record<ChangeKind, string> = {
@@ -45,6 +52,8 @@ function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isOpening, setIsOpening] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [commitMessage, setCommitMessage] = useState("");
+  const [isCommitting, setIsCommitting] = useState(false);
 
   async function loadRepository(path: string, command: "open_repository" | "refresh_repository") {
     const nextRepository = await invoke<RepositoryState>(command, { path });
@@ -100,11 +109,39 @@ function App() {
     }
   }
 
+  async function handleCreateCommit() {
+    if (!repository) {
+      return;
+    }
+
+    setIsCommitting(true);
+
+    try {
+      const nextRepository = await invoke<RepositoryState>("create_commit", {
+        path: repository.path,
+        message: commitMessage,
+      });
+
+      setRepository(nextRepository);
+      setCommitMessage("");
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "No fue posible crear el commit en el repositorio activo.",
+      );
+    } finally {
+      setIsCommitting(false);
+    }
+  }
+
   const hasLocalChanges = Boolean(
     repository &&
       (repository.status.stagedChanges.length > 0 ||
         repository.status.unstagedChanges.length > 0),
   );
+  const hasStagedChanges = Boolean(repository && repository.status.stagedChanges.length > 0);
 
   return (
     <main className="app-shell">
@@ -245,6 +282,91 @@ function App() {
                 No hay cambios locales. El repositorio no tiene archivos staged
                 ni unstaged en este momento.
               </p>
+            </div>
+          )}
+        </article>
+      </section>
+
+      <section className="commit-grid">
+        <article className="info-card">
+          <div className="card-header">
+            <span className="section-kicker">Nuevo commit</span>
+            {repository ? (
+              <span className="status-pill">
+                {hasStagedChanges ? "Listo para commit" : "Sin staged"}
+              </span>
+            ) : null}
+          </div>
+
+          {repository ? (
+            <form
+              className="commit-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handleCreateCommit();
+              }}
+            >
+              <label className="field-label" htmlFor="commit-message">
+                Mensaje de commit
+              </label>
+              <textarea
+                id="commit-message"
+                className="commit-input"
+                value={commitMessage}
+                onChange={(event) => setCommitMessage(event.target.value)}
+                placeholder="Describe los cambios que ya dejaste staged"
+                rows={4}
+              />
+              <div className="commit-form__footer">
+                <p className="helper-text">
+                  Solo se incluirán los archivos que aparecen en la columna staged.
+                </p>
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={!hasStagedChanges || isCommitting}
+                >
+                  {isCommitting ? "Creando commit..." : "Crear commit"}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <p className="placeholder-copy">
+              Abre un repositorio para ingresar un mensaje y crear commits desde la app.
+            </p>
+          )}
+        </article>
+
+        <article className="info-card">
+          <div className="card-header">
+            <span className="section-kicker">Historial visible</span>
+            {repository ? (
+              <span className="status-pill">
+                {repository.recentCommits.length > 0 ? "Actualizado" : "Sin commits"}
+              </span>
+            ) : null}
+          </div>
+
+          {!repository ? (
+            <p className="placeholder-copy">
+              El historial reciente aparecerá aquí cuando cargues un repositorio.
+            </p>
+          ) : repository.recentCommits.length > 0 ? (
+            <ul className="history-list">
+              {repository.recentCommits.map((commit) => (
+                <li key={commit.shortSha} className="history-row">
+                  <div className="history-row__meta">
+                    <span className="commit-sha">{commit.shortSha}</span>
+                    <span className="history-author">{commit.authorName}</span>
+                  </div>
+                  <p className="history-summary">{commit.summary}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="empty-state empty-state--compact">
+              <h2>Sin historial todavía</h2>
+              <p>El repositorio aún no tiene commits visibles para mostrar.</p>
             </div>
           )}
         </article>

@@ -1,4 +1,4 @@
-use git2::{Repository, Status, StatusOptions};
+use git2::{Commit, Repository, Signature, Status, StatusOptions};
 use serde::Serialize;
 use std::path::Path;
 
@@ -37,6 +37,15 @@ struct RepositoryState {
     head_short_sha: Option<String>,
     is_bare: bool,
     status: RepositoryStatus,
+    recent_commits: Vec<CommitSummary>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CommitSummary {
+    short_sha: String,
+    summary: String,
+    author_name: String,
 }
 
 fn short_head_sha(repository: &Repository) -> Option<String> {
@@ -61,6 +70,25 @@ fn display_name(path: &Path) -> String {
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| path.display().to_string())
+}
+
+fn display_commit_summary(commit: &Commit) -> String {
+    commit
+        .summary()
+        .map(str::to_owned)
+        .unwrap_or_else(|| "Commit sin mensaje".to_string())
+}
+
+fn display_author_name(commit: &Commit) -> String {
+    commit
+        .author()
+        .name()
+        .map(str::to_owned)
+        .unwrap_or_else(|| "Autor desconocido".to_string())
+}
+
+fn short_oid(oid: git2::Oid) -> String {
+    oid.to_string().chars().take(7).collect()
 }
 
 fn map_index_change(status: Status) -> Option<ChangeKind> {
@@ -145,6 +173,97 @@ fn repository_status(repository: &Repository) -> Result<RepositoryStatus, String
     })
 }
 
+fn recent_commits(repository: &Repository) -> Result<Vec<CommitSummary>, String> {
+    let mut revwalk = match repository.revwalk() {
+        Ok(revwalk) => revwalk,
+        Err(error) => {
+            return Err(format!(
+                "No fue posible leer el historial del repositorio: {error}"
+            ))
+        }
+    };
+
+    if let Err(error) = revwalk.push_head() {
+        if error.code() == git2::ErrorCode::UnbornBranch
+            || error.code() == git2::ErrorCode::NotFound
+            || error.class() == git2::ErrorClass::Reference
+        {
+            return Ok(Vec::new());
+        }
+
+        return Err(format!(
+            "No fue posible leer el historial del repositorio: {error}"
+        ));
+    }
+
+    let mut commits = Vec::new();
+
+    for oid in revwalk.take(8) {
+        let oid =
+            oid.map_err(|error| format!("No fue posible recorrer el historial del repositorio: {error}"))?;
+        let commit = repository
+            .find_commit(oid)
+            .map_err(|error| format!("No fue posible cargar un commit del historial: {error}"))?;
+
+        commits.push(CommitSummary {
+            short_sha: short_oid(commit.id()),
+            summary: display_commit_summary(&commit),
+            author_name: display_author_name(&commit),
+        });
+    }
+
+    Ok(commits)
+}
+
+fn commit_signature(repository: &Repository) -> Result<Signature<'_>, String> {
+    repository
+        .signature()
+        .map_err(|error| format!("Git rechazo el commit: {error}"))
+}
+
+fn create_commit_for_repository(repository: &Repository, message: &str) -> Result<(), String> {
+    let trimmed_message = message.trim();
+    if trimmed_message.is_empty() {
+        return Err("Debes ingresar un mensaje de commit.".to_string());
+    }
+
+    let status = repository_status(repository)?;
+    if status.staged_changes.is_empty() {
+        return Err("No hay cambios staged para crear un commit.".to_string());
+    }
+
+    let signature = commit_signature(repository)?;
+    let mut index = repository
+        .index()
+        .map_err(|error| format!("No fue posible abrir el index del repositorio: {error}"))?;
+    index
+        .write()
+        .map_err(|error| format!("No fue posible escribir el index del repositorio: {error}"))?;
+
+    let tree_id = index
+        .write_tree()
+        .map_err(|error| format!("No fue posible generar el arbol del commit: {error}"))?;
+    let tree = repository
+        .find_tree(tree_id)
+        .map_err(|error| format!("No fue posible cargar el arbol del commit: {error}"))?;
+
+    let parent_commit = repository.head().ok().and_then(|head| head.peel_to_commit().ok());
+    let parent_refs = parent_commit.iter().collect::<Vec<_>>();
+
+    repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            trimmed_message,
+            &tree,
+            &parent_refs,
+        )
+        .map_err(|error| format!("Git rechazo el commit: {error}"))?;
+
+    Ok(())
+}
+
 fn repository_state_from_path(path: &Path) -> Result<RepositoryState, String> {
     let repository = Repository::open(path).map_err(|error| {
         format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}")
@@ -163,6 +282,7 @@ fn repository_state_from_path(path: &Path) -> Result<RepositoryState, String> {
         head_short_sha: short_head_sha(&repository),
         is_bare: repository.is_bare(),
         status: repository_status(&repository)?,
+        recent_commits: recent_commits(&repository)?,
     })
 }
 
@@ -176,19 +296,31 @@ fn refresh_repository(path: String) -> Result<RepositoryState, String> {
     repository_state_from_path(Path::new(&path))
 }
 
+#[tauri::command]
+fn create_commit(path: String, message: String) -> Result<RepositoryState, String> {
+    let repository = Repository::open(Path::new(&path))
+        .map_err(|error| format!("La carpeta seleccionada no contiene un repositorio Git valido: {error}"))?;
+    create_commit_for_repository(&repository, &message)?;
+    repository_state_from_path(Path::new(&path))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![open_repository, refresh_repository])
+        .invoke_handler(tauri::generate_handler![
+            open_repository,
+            refresh_repository,
+            create_commit
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{repository_state_from_path, ChangeKind, ChangedFile};
+    use super::{create_commit_for_repository, repository_state_from_path, ChangeKind, ChangedFile};
     use git2::{BranchType, IndexAddOption, Repository, Signature};
     use std::fs;
     use std::path::Path;
@@ -399,5 +531,72 @@ mod tests {
             "expected deleted file in {:?}",
             state.status.staged_changes
         );
+    }
+
+    #[test]
+    fn creates_commit_from_staged_changes_and_updates_history() {
+        let directory = tempdir().expect("tempdir");
+        let repository = Repository::init(directory.path()).expect("repo init");
+        let signature = Signature::now("GitGud", "gitgud@example.com").expect("signature");
+
+        fs::write(directory.path().join("tracked.txt"), "base\n").expect("write tracked");
+        let mut index = repository.index().expect("index");
+        index
+            .add_all(["*"], IndexAddOption::DEFAULT, None)
+            .expect("add all");
+        index.write().expect("write index");
+        let tree_id = index.write_tree().expect("write tree");
+        let tree = repository.find_tree(tree_id).expect("find tree");
+        repository
+            .commit(Some("HEAD"), &signature, &signature, "init", &tree, &[])
+            .expect("commit");
+
+        repository
+            .config()
+            .expect("config")
+            .set_str("user.name", "GitGud Tester")
+            .expect("set user.name");
+        repository
+            .config()
+            .expect("config")
+            .set_str("user.email", "tester@example.com")
+            .expect("set user.email");
+
+        fs::write(directory.path().join("tracked.txt"), "base\nstaged\n").expect("modify tracked");
+        let mut index = repository.index().expect("index");
+        index
+            .add_path(Path::new("tracked.txt"))
+            .expect("stage tracked");
+        index.write().expect("write index");
+
+        create_commit_for_repository(&repository, "Save staged work").expect("create commit");
+
+        let state = repository_state_from_path(directory.path()).expect("state");
+
+        assert!(state.status.staged_changes.is_empty());
+        assert!(state.recent_commits.len() >= 2);
+        assert_eq!(state.recent_commits[0].summary, "Save staged work");
+        assert_eq!(state.head_short_sha.as_deref(), Some(state.recent_commits[0].short_sha.as_str()));
+    }
+
+    #[test]
+    fn rejects_commit_when_nothing_is_staged() {
+        let directory = tempdir().expect("tempdir");
+        let repository = Repository::init(directory.path()).expect("repo init");
+
+        repository
+            .config()
+            .expect("config")
+            .set_str("user.name", "GitGud Tester")
+            .expect("set user.name");
+        repository
+            .config()
+            .expect("config")
+            .set_str("user.email", "tester@example.com")
+            .expect("set user.email");
+
+        let error = create_commit_for_repository(&repository, "Empty commit").expect_err("expected error");
+
+        assert!(error.contains("No hay cambios staged"));
     }
 }

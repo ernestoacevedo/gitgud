@@ -33,6 +33,10 @@ select {
   font: inherit;
 }
 
+textarea {
+  resize: vertical;
+}
+
 .app-shell {
   min-height: 100vh;
   padding: 48px;
@@ -295,6 +299,12 @@ select {
   display: grid;
 }
 
+.commit-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.95fr);
+  gap: 28px;
+}
+
 .change-columns {
   margin-top: 28px;
   display: grid;
@@ -380,6 +390,93 @@ select {
   max-width: none;
 }
 
+.commit-form {
+  margin-top: 26px;
+  display: grid;
+  gap: 16px;
+}
+
+.field-label,
+.history-author,
+.commit-sha {
+  font-family: "Helvetica Neue", Arial, sans-serif;
+}
+
+.field-label {
+  font-size: 0.86rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(246, 239, 227, 0.6);
+}
+
+.commit-input {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 22px;
+  padding: 16px 18px;
+  color: #f6efe3;
+  background: rgba(8, 8, 12, 0.5);
+  min-height: 132px;
+}
+
+.commit-input::placeholder {
+  color: rgba(246, 239, 227, 0.38);
+}
+
+.commit-form__footer {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.history-list {
+  list-style: none;
+  margin: 26px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.history-row {
+  padding: 18px;
+  border-radius: 20px;
+  background: rgba(9, 8, 13, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.history-row__meta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.commit-sha {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(255, 190, 116, 0.16);
+  color: #ffd39e;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.history-author {
+  color: rgba(246, 239, 227, 0.68);
+  font-size: 0.92rem;
+}
+
+.history-summary {
+  margin: 12px 0 0;
+  font-size: 1.1rem;
+  line-height: 1.45;
+}
+
 @media (max-width: 980px) {
   .app-shell {
     padding: 24px;
@@ -391,6 +488,10 @@ select {
   }
 
   .status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .commit-grid {
     grid-template-columns: 1fr;
   }
 
