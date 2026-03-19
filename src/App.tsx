@@ -25,6 +25,9 @@ import { TabBar } from "./components/TabBar";
 import { TimelinePanel } from "./components/TimelinePanel";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 
+type RemoteOperation = "fetch" | "pull" | "push";
+type RemoteOperationStatus = "idle" | "loading" | "success" | "error";
+
 function App() {
   const [tabs, setTabs] = useState<WorkspaceTab[]>([createEmptyTab(1)]);
   const [activeTabId, setActiveTabId] = useState(1);
@@ -36,15 +39,21 @@ function App() {
   const [isOpening, setIsOpening] = useState(false);
   const [activeStatusAction, setActiveStatusAction] = useState<string | null>(null);
   const [isCommitting, setIsCommitting] = useState(false);
-  const [activeRemoteOperation, setActiveRemoteOperation] = useState<
-    "fetch" | "pull" | "push" | null
-  >(null);
+  const [activeRemoteOperation, setActiveRemoteOperation] = useState<RemoteOperation | null>(null);
+  const [remoteOperationStatuses, setRemoteOperationStatuses] = useState<
+    Record<RemoteOperation, RemoteOperationStatus>
+  >({
+    fetch: "idle",
+    pull: "idle",
+    push: "idle",
+  });
   const [isLoadingCommitDetail, setIsLoadingCommitDetail] = useState(false);
   const latestCommitDetailRequestRef = useRef(0);
   const hasRestoredSessionRef = useRef(false);
   const refreshInFlightRef = useRef<Set<number>>(new Set());
   const tabContextMenuRef = useRef<HTMLDivElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const remoteFeedbackTimeoutRef = useRef<number | null>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const repository = activeTab?.repository ?? null;
@@ -351,12 +360,26 @@ function App() {
     }
   }
 
-  async function handleRemoteOperation(operation: "fetch" | "pull" | "push") {
+  async function handleRemoteOperation(operation: RemoteOperation) {
     if (!repository || !activeTab) {
       return;
     }
 
+    if (remoteFeedbackTimeoutRef.current !== null) {
+      window.clearTimeout(remoteFeedbackTimeoutRef.current);
+      remoteFeedbackTimeoutRef.current = null;
+    }
+
     setActiveRemoteOperation(operation);
+    setRemoteOperationStatuses({
+      fetch: "idle",
+      pull: "idle",
+      push: "idle",
+    });
+    setRemoteOperationStatuses((current) => ({
+      ...current,
+      [operation]: "loading",
+    }));
 
     try {
       const nextRepository = await invoke<RepositoryState>(`${operation}_remote`, {
@@ -368,6 +391,10 @@ function App() {
         title: nextRepository.name,
         feedback: null,
       });
+      setRemoteOperationStatuses((current) => ({
+        ...current,
+        [operation]: "success",
+      }));
     } catch (error) {
       showErrorFeedback(
         activeTab.id,
@@ -375,8 +402,21 @@ function App() {
         error,
         `No fue posible ejecutar ${operation} en el repositorio activo.`,
       );
+      setRemoteOperationStatuses((current) => ({
+        ...current,
+        [operation]: "error",
+      }));
     } finally {
       setActiveRemoteOperation(null);
+
+      remoteFeedbackTimeoutRef.current = window.setTimeout(() => {
+        setRemoteOperationStatuses({
+          fetch: "idle",
+          pull: "idle",
+          push: "idle",
+        });
+        remoteFeedbackTimeoutRef.current = null;
+      }, 2200);
     }
   }
 
@@ -595,6 +635,27 @@ function App() {
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (remoteFeedbackTimeoutRef.current !== null) {
+        window.clearTimeout(remoteFeedbackTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    setRemoteOperationStatuses({
+      fetch: "idle",
+      pull: "idle",
+      push: "idle",
+    });
+
+    if (remoteFeedbackTimeoutRef.current !== null) {
+      window.clearTimeout(remoteFeedbackTimeoutRef.current);
+      remoteFeedbackTimeoutRef.current = null;
+    }
+  }, [activeTabId, repository?.path]);
+
+  useEffect(() => {
     if (!hasRestoredSessionRef.current) {
       return;
     }
@@ -794,6 +855,7 @@ function App() {
       <RepositoryToolbar
         repository={repository}
         activeRemoteOperation={activeRemoteOperation}
+        remoteOperationStatuses={remoteOperationStatuses}
         onRemoteOperation={(operation) => void handleRemoteOperation(operation)}
       />
 

@@ -1,14 +1,19 @@
 import type { RepositoryState } from "../app/types";
 
+type RemoteOperation = "fetch" | "pull" | "push";
+type RemoteOperationStatus = "idle" | "loading" | "success" | "error";
+
 type RepositoryToolbarProps = {
   repository: RepositoryState | null;
-  activeRemoteOperation: "fetch" | "pull" | "push" | null;
-  onRemoteOperation: (operation: "fetch" | "pull" | "push") => void;
+  activeRemoteOperation: RemoteOperation | null;
+  remoteOperationStatuses: Record<RemoteOperation, RemoteOperationStatus>;
+  onRemoteOperation: (operation: RemoteOperation) => void;
 };
 
 export function RepositoryToolbar({
   repository,
   activeRemoteOperation,
+  remoteOperationStatuses,
   onRemoteOperation,
 }: RepositoryToolbarProps) {
   return (
@@ -21,6 +26,7 @@ export function RepositoryToolbar({
               label="FETCH"
               tone="text-secondary"
               isActive={activeRemoteOperation === "fetch"}
+              status={remoteOperationStatuses.fetch}
               disabled={activeRemoteOperation !== null}
               onClick={() => onRemoteOperation("fetch")}
             />
@@ -30,6 +36,7 @@ export function RepositoryToolbar({
               label="PULL"
               tone="text-primary"
               isActive={activeRemoteOperation === "pull"}
+              status={remoteOperationStatuses.pull}
               disabled={activeRemoteOperation !== null}
               onClick={() => onRemoteOperation("pull")}
             />
@@ -39,6 +46,7 @@ export function RepositoryToolbar({
               label="PUSH"
               tone="text-tertiary"
               isActive={activeRemoteOperation === "push"}
+              status={remoteOperationStatuses.push}
               disabled={activeRemoteOperation !== null}
               onClick={() => onRemoteOperation("push")}
             />
@@ -69,6 +77,7 @@ type RemoteActionButtonProps = {
   label: string;
   tone: string;
   isActive: boolean;
+  status: RemoteOperationStatus;
   disabled: boolean;
   onClick: () => void;
 };
@@ -78,19 +87,39 @@ function RemoteActionButton({
   label,
   tone,
   isActive,
+  status,
   disabled,
   onClick,
 }: RemoteActionButtonProps) {
+  const statusIcon =
+    status === "loading"
+      ? "sync"
+      : status === "success"
+        ? "check_circle"
+        : status === "error"
+          ? "error"
+          : icon;
+
   return (
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`flex items-center gap-1.5 px-3 py-1 text-xs font-bold font-label text-on-surface transition-all hover:bg-surface-container-highest ${
-        isActive ? "opacity-50" : ""
-      }`}
+      className={`remote-action-button remote-action-button--${status} ${
+        isActive ? "remote-action-button--active" : ""
+      } ${disabled ? "remote-action-button--disabled" : ""}`}
+      aria-live="polite"
     >
-      <span className={`material-symbols-outlined text-sm ${tone}`}>{icon}</span>
-      {label}
+      <span
+        className={`material-symbols-outlined text-sm ${tone} ${
+          status === "loading" ? "remote-action-button__icon--spin" : ""
+        }`}
+      >
+        {statusIcon}
+      </span>
+      <span>{label}</span>
+      <span className="remote-action-button__status" aria-hidden="true">
+        {status === "loading" ? "..." : status === "success" ? "OK" : status === "error" ? "!" : ""}
+      </span>
     </button>
   );
 }
