@@ -1,4 +1,5 @@
 import type { MouseEvent, RefObject } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getTabLabel } from "../app/utils";
 import type { TabContextMenuState, WorkspaceTab } from "../app/types";
 
@@ -51,12 +52,38 @@ export function TabBar({
   onCloseContextMenu,
   onOpenRepository,
 }: TabBarProps) {
+  const isMacOs = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
   const contextTab = tabContextMenu ? tabs.find((tab) => tab.id === tabContextMenu.tabId) : null;
+  const appWindow = getCurrentWindow();
+
+  function handleHeaderMouseDown(event: MouseEvent<HTMLElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    const target = event.target as HTMLElement | null;
+
+    if (
+      target?.closest(
+        "button, input, textarea, select, a, [role='button'], [data-no-window-drag]",
+      )
+    ) {
+      return;
+    }
+
+    void appWindow.startDragging();
+  }
 
   return (
-    <header className="z-50 flex h-12 shrink-0 items-center justify-between border-b border-outline-variant/10 bg-[#060e20] px-4 font-headline tracking-tight text-[#00D1FF]">
-      <div className="flex h-full items-center gap-6">
-        <nav className="flex h-full items-end gap-1">
+    <header
+      className={`z-50 flex shrink-0 items-end justify-between border-b border-outline-variant/10 bg-[#060e20] font-headline tracking-tight text-[#00D1FF] ${
+        isMacOs ? "h-14 px-4 pb-0 pl-[5.5rem] pr-4 pt-2" : "h-12 px-4"
+      }`}
+      data-tauri-drag-region
+      onMouseDown={handleHeaderMouseDown}
+    >
+      <div className="flex h-full items-end gap-6">
+        <nav className="flex h-full items-end gap-1" data-no-window-drag>
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -118,6 +145,7 @@ export function TabBar({
         {tabContextMenu ? (
           <div
             ref={tabContextMenuRef}
+            data-no-window-drag
             className="fixed z-[100] min-w-40 rounded-md border border-[#1f325d] bg-[#091328] p-1 shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
             style={{ left: tabContextMenu.x, top: tabContextMenu.y }}
             onClick={(event) => event.stopPropagation()}
@@ -159,7 +187,7 @@ export function TabBar({
         ) : null}
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex h-full items-center gap-4" data-no-window-drag>
         <button
           className="flex h-8 w-8 items-center justify-center rounded-full transition-colors hover:bg-[#192540]"
           onClick={onOpenRepository}
