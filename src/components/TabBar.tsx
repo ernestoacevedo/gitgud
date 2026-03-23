@@ -97,7 +97,7 @@ export function TabBar({
               onDragOver={(event) => event.preventDefault()}
               onDrop={() => onDropOnTab(tab.id)}
               onContextMenu={(event) => onTabContextMenu(event, tab.id)}
-              className={`flex h-8 items-center gap-2 rounded-t-md px-3 text-sm transition-colors duration-150 ${
+              className={`flex h-8 select-none items-center gap-2 rounded-t-md px-3 text-sm transition-colors duration-150 ${
                 tab.id === activeTabId
                   ? "border-b-2 border-[#00D1FF] pb-1 text-[#00D1FF] hover:bg-[#192540]"
                   : "text-[#dee5ff]/60 hover:bg-[#192540]"
