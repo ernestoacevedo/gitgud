@@ -27,6 +27,21 @@ import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 
 type RemoteOperation = "fetch" | "pull" | "push";
 type RemoteOperationStatus = "idle" | "loading" | "success" | "error";
+const MAX_CACHED_COMMIT_DETAILS = 24;
+
+function pruneCommitDetailCache(
+  cache: Record<string, CommitDetail>,
+  recentCommits: RepositoryState["recentCommits"],
+) {
+  const visibleCommitShas = new Set(recentCommits.map((commit) => commit.fullSha));
+  const nextEntries = Object.entries(cache).filter(([commitSha]) => visibleCommitShas.has(commitSha));
+
+  if (nextEntries.length === Object.keys(cache).length && nextEntries.length <= MAX_CACHED_COMMIT_DETAILS) {
+    return cache;
+  }
+
+  return Object.fromEntries(nextEntries.slice(-MAX_CACHED_COMMIT_DETAILS));
+}
 
 function App() {
   const [tabs, setTabs] = useState<WorkspaceTab[]>([createEmptyTab(1)]);
@@ -100,12 +115,27 @@ function App() {
     command: "open_repository" | "refresh_repository",
   ) {
     const nextRepository = await invoke<RepositoryState>(command, { path });
-    updateTab(tabId, (tab) => ({
-      ...tab,
-      title: tab.customTitle ?? nextRepository.name,
-      repository: nextRepository,
-      feedback: null,
-    }));
+    updateTab(tabId, (tab) => {
+      const isSameRepository = tab.repository?.path === nextRepository.path;
+      const nextCommitDetailCache = isSameRepository
+        ? pruneCommitDetailCache(tab.commitDetailCache, nextRepository.recentCommits)
+        : {};
+
+      return {
+        ...tab,
+        title: tab.customTitle ?? nextRepository.name,
+        repository: nextRepository,
+        feedback: null,
+        commitMessage: isSameRepository ? tab.commitMessage : "",
+        selectedHistoryEntryId: isSameRepository ? tab.selectedHistoryEntryId : null,
+        selectedCommitDetail:
+          isSameRepository && tab.selectedCommitDetail
+            ? nextCommitDetailCache[tab.selectedCommitDetail.fullSha] ?? null
+            : null,
+        commitDetailError: null,
+        commitDetailCache: nextCommitDetailCache,
+      };
+    });
   }
 
   const refreshTabRepository = useCallback(
@@ -421,18 +451,6 @@ function App() {
   }
 
   async function loadCommitDetail(tabId: number, path: string, commitSha: string) {
-    const targetTab = tabs.find((tab) => tab.id === tabId);
-    const cachedDetail = targetTab?.commitDetailCache[commitSha];
-
-    if (cachedDetail) {
-      patchTab(tabId, {
-        selectedCommitDetail: cachedDetail,
-        commitDetailError: null,
-      });
-      setIsLoadingCommitDetail(false);
-      return;
-    }
-
     const requestId = latestCommitDetailRequestRef.current + 1;
     latestCommitDetailRequestRef.current = requestId;
     setIsLoadingCommitDetail(true);
@@ -449,24 +467,43 @@ function App() {
 
       updateTab(tabId, (tab) => ({
         ...tab,
-        selectedCommitDetail: detail,
-        commitDetailError: null,
-        commitDetailCache: {
-          ...tab.commitDetailCache,
-          [commitSha]: detail,
-        },
+        selectedCommitDetail:
+          tab.repository?.path === path && tab.selectedHistoryEntryId === commitSha
+            ? detail
+            : tab.selectedCommitDetail,
+        commitDetailError:
+          tab.repository?.path === path && tab.selectedHistoryEntryId === commitSha
+            ? null
+            : tab.commitDetailError,
+        commitDetailCache:
+          tab.repository?.path === path
+            ? pruneCommitDetailCache(
+                {
+                  ...tab.commitDetailCache,
+                  [commitSha]: detail,
+                },
+                tab.repository.recentCommits,
+              )
+            : tab.commitDetailCache,
       }));
     } catch (error) {
       if (latestCommitDetailRequestRef.current !== requestId) {
         return;
       }
 
-      patchTab(tabId, {
-        selectedCommitDetail: null,
-        commitDetailError:
-          error instanceof Error
-            ? error.message
-            : "No fue posible cargar el detalle del commit seleccionado.",
+      updateTab(tabId, (tab) => {
+        if (tab.repository?.path !== path || tab.selectedHistoryEntryId !== commitSha) {
+          return tab;
+        }
+
+        return {
+          ...tab,
+          selectedCommitDetail: null,
+          commitDetailError:
+            error instanceof Error
+              ? error.message
+              : "No fue posible cargar el detalle del commit seleccionado.",
+        };
       });
     } finally {
       if (latestCommitDetailRequestRef.current === requestId) {
@@ -480,6 +517,9 @@ function App() {
       if (!activeTab?.id) {
         return;
       }
+
+      latestCommitDetailRequestRef.current += 1;
+      setIsLoadingCommitDetail(false);
 
       startTransition(() => {
         setTabs((currentTabs) =>
@@ -502,6 +542,9 @@ function App() {
     if (!activeTab?.id) {
       return;
     }
+
+    latestCommitDetailRequestRef.current += 1;
+    setIsLoadingCommitDetail(false);
 
     patchTab(activeTab.id, {
       selectedHistoryEntryId: WORKING_TREE_HISTORY_ENTRY_ID,
@@ -815,11 +858,34 @@ function App() {
 
   useEffect(() => {
     if (!activeTab || !repository || !selectedCommitSha) {
+      latestCommitDetailRequestRef.current += 1;
+      setIsLoadingCommitDetail(false);
+      return;
+    }
+
+    const cachedDetail = activeTab.commitDetailCache[selectedCommitSha];
+
+    if (cachedDetail) {
+      if (selectedCommitDetail?.fullSha !== cachedDetail.fullSha || commitDetailError) {
+        patchTab(activeTab.id, {
+          selectedCommitDetail: cachedDetail,
+          commitDetailError: null,
+        });
+      }
+
+      setIsLoadingCommitDetail(false);
       return;
     }
 
     void loadCommitDetail(activeTab.id, repository.path, selectedCommitSha);
-  }, [activeTab?.id, repository, selectedCommitSha, tabs]);
+  }, [
+    activeTab?.commitDetailCache,
+    activeTab?.id,
+    commitDetailError,
+    repository?.path,
+    selectedCommitDetail?.fullSha,
+    selectedCommitSha,
+  ]);
 
   const hasStagedChanges = Boolean(repository && repository.status.stagedChanges.length > 0);
   const workingTreeSummary = repository ? summarizeWorkingTree(repository.status) : null;

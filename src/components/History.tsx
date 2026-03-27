@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { CHANGE_LABELS, formatCompactDateTime, formatDateTime } from "../app/utils";
 import type { CommitDetail, CommitSummary } from "../app/types";
 import { FeedbackNotice } from "./Shared";
@@ -66,15 +66,35 @@ type CommitDetailPanelProps = {
 
 export function CommitDetailPanel({ detail }: CommitDetailPanelProps) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+  const copyStateTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyStateTimeoutRef.current !== null) {
+        window.clearTimeout(copyStateTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  function scheduleCopyStateReset() {
+    if (copyStateTimeoutRef.current !== null) {
+      window.clearTimeout(copyStateTimeoutRef.current);
+    }
+
+    copyStateTimeoutRef.current = window.setTimeout(() => {
+      setCopyState("idle");
+      copyStateTimeoutRef.current = null;
+    }, 1500);
+  }
 
   async function handleCopySha() {
     try {
       await navigator.clipboard.writeText(detail.fullSha);
       setCopyState("copied");
-      window.setTimeout(() => setCopyState("idle"), 1500);
+      scheduleCopyStateReset();
     } catch {
       setCopyState("error");
-      window.setTimeout(() => setCopyState("idle"), 1500);
+      scheduleCopyStateReset();
     }
   }
 
